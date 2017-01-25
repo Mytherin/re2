@@ -25,6 +25,10 @@ StringPiece StringPiece::substr(size_type pos, size_type n) const {
   return StringPiece(data_ + pos, n);
 }
 
+void StringPiece::bla() {
+
+}
+
 StringPiece::size_type StringPiece::find(const StringPiece& s,
                                          size_type pos) const {
   if (pos > size_) return npos;

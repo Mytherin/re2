@@ -14,7 +14,7 @@
 
 CXX?=g++
 # can override
-CXXFLAGS?=-O3 -g
+CXXFLAGS?=-O0 -g
 LDFLAGS?=
 # required
 RE2_CXXFLAGS?=-std=c++11 -pthread -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers -I. $(CCICU) $(CCPCRE)

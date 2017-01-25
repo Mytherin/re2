@@ -47,13 +47,13 @@ class StringPiece {
   // in a "const char*" or a "string" wherever a "StringPiece" is
   // expected.
   StringPiece()
-      : data_(NULL), size_(0) {}
+      : data_(NULL), size_(0), GetPrev(nullptr), GetNext(nullptr) {}
   StringPiece(const std::string& str)
-      : data_(str.data()), size_(str.size()) {}
+      : data_(str.data()), size_(str.size()), GetPrev(nullptr), GetNext(nullptr) {}
   StringPiece(const char* str)
-      : data_(str), size_(str == NULL ? 0 : strlen(str)) {}
+      : data_(str), size_(str == NULL ? 0 : strlen(str)), GetPrev(nullptr), GetNext(nullptr) {}
   StringPiece(const char* str, size_type len)
-      : data_(str), size_(len) {}
+      : data_(str), size_(len), GetPrev(nullptr), GetNext(nullptr) {}
 
   const_iterator begin() const { return data_; }
   const_iterator end() const { return data_ + size_; }
@@ -148,9 +148,28 @@ class StringPiece {
   size_type rfind(const StringPiece& s, size_type pos = npos) const;
   size_type rfind(char c, size_type pos = npos) const;
 
+  void bla();
+
+  StringPiece* prev() {
+    if (GetPrev == nullptr) {
+      return nullptr;
+    }
+    return GetPrev(this);
+  }
+
+  StringPiece* next() {
+    if (GetNext == nullptr) {
+      return nullptr;
+    }
+    return GetNext(this);
+  }
  private:
   const_pointer data_;
   size_type size_;
+ public:
+  StringPiece* (*GetPrev)(StringPiece* current) = nullptr;
+  StringPiece* (*GetNext)(StringPiece* current) = nullptr;
+  void* extra_data = nullptr;
 };
 
 inline bool operator==(const StringPiece& x, const StringPiece& y) {

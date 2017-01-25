@@ -1300,9 +1300,10 @@ inline bool DFA::InlinedSearchLoop(SearchParams* params,
                                    bool want_earliest_match,
                                    bool run_forward) {
   State* start = params->start;
-  const uint8_t* bp = BytePtr(params->text.begin());  // start of text
+  StringPiece* piece = &params->text;
+  const uint8_t* bp = BytePtr(piece->begin());  // start of text
   const uint8_t* p = bp;                              // text scanning point
-  const uint8_t* ep = BytePtr(params->text.end());    // end of text
+  const uint8_t* ep = BytePtr(piece->end());    // end of text
   const uint8_t* resetp = NULL;                       // p at last cache reset
   if (!run_forward) {
     using std::swap;
@@ -1323,137 +1324,157 @@ inline bool DFA::InlinedSearchLoop(SearchParams* params,
     }
   }
 
-  while (p != ep) {
-    if (ExtraDebug)
-      fprintf(stderr, "@%td: %s\n",
-              p - bp, DumpState(s).c_str());
-    if (have_firstbyte && s == start) {
-      // In start state, only way out is to find firstbyte,
-      // so use optimized assembly in memchr to skip ahead.
-      // If firstbyte isn't found, we can skip to the end
-      // of the string.
-      if (run_forward) {
-        if ((p = BytePtr(memchr(p, params->firstbyte, ep - p))) == NULL) {
-          p = ep;
-          break;
+  while(1) {
+    while (p != ep) {
+      if (ExtraDebug)
+        fprintf(stderr, "@%td: %s\n",
+                p - bp, DumpState(s).c_str());
+      if (have_firstbyte && s == start) {
+        // In start state, only way out is to find firstbyte,
+        // so use optimized assembly in memchr to skip ahead.
+        // If firstbyte isn't found, we can skip to the end
+        // of the string.
+        if (run_forward) {
+          if ((p = BytePtr(memchr(p, params->firstbyte, ep - p))) == NULL) {
+            p = ep;
+            break;
+          }
+        } else {
+          if ((p = BytePtr(memrchr(ep, params->firstbyte, p - ep))) == NULL) {
+            p = ep;
+            break;
+          }
+          p++;
         }
-      } else {
-        if ((p = BytePtr(memrchr(ep, params->firstbyte, p - ep))) == NULL) {
-          p = ep;
-          break;
-        }
-        p++;
       }
-    }
 
-    int c;
-    if (run_forward)
-      c = *p++;
-    else
-      c = *--p;
+      int c;
+      if (run_forward)
+        c = *p++;
+      else
+        c = *--p;
 
-    // Note that multiple threads might be consulting
-    // s->next_[bytemap[c]] simultaneously.
-    // RunStateOnByte takes care of the appropriate locking,
-    // including a memory barrier so that the unlocked access
-    // (sometimes known as "double-checked locking") is safe.
-    // The alternative would be either one DFA per thread
-    // or one mutex operation per input byte.
-    //
-    // ns == DeadState means the state is known to be dead
-    // (no more matches are possible).
-    // ns == NULL means the state has not yet been computed
-    // (need to call RunStateOnByteUnlocked).
-    // RunStateOnByte returns ns == NULL if it is out of memory.
-    // ns == FullMatchState means the rest of the string matches.
-    //
-    // Okay to use bytemap[] not ByteMap() here, because
-    // c is known to be an actual byte and not kByteEndText.
+      // Note that multiple threads might be consulting
+      // s->next_[bytemap[c]] simultaneously.
+      // RunStateOnByte takes care of the appropriate locking,
+      // including a memory barrier so that the unlocked access
+      // (sometimes known as "double-checked locking") is safe.
+      // The alternative would be either one DFA per thread
+      // or one mutex operation per input byte.
+      //
+      // ns == DeadState means the state is known to be dead
+      // (no more matches are possible).
+      // ns == NULL means the state has not yet been computed
+      // (need to call RunStateOnByteUnlocked).
+      // RunStateOnByte returns ns == NULL if it is out of memory.
+      // ns == FullMatchState means the rest of the string matches.
+      //
+      // Okay to use bytemap[] not ByteMap() here, because
+      // c is known to be an actual byte and not kByteEndText.
 
-    State* ns = s->next_[bytemap[c]].load(std::memory_order_acquire);
-    if (ns == NULL) {
-      ns = RunStateOnByteUnlocked(s, c);
+      State* ns = s->next_[bytemap[c]].load(std::memory_order_acquire);
       if (ns == NULL) {
-        // After we reset the cache, we hold cache_mutex exclusively,
-        // so if resetp != NULL, it means we filled the DFA state
-        // cache with this search alone (without any other threads).
-        // Benchmarks show that doing a state computation on every
-        // byte runs at about 0.2 MB/s, while the NFA (nfa.cc) can do the
-        // same at about 2 MB/s.  Unless we're processing an average
-        // of 10 bytes per state computation, fail so that RE2 can
-        // fall back to the NFA.
-        if (dfa_should_bail_when_slow && resetp != NULL &&
-            static_cast<size_t>(p - resetp) < 10*state_cache_.size()) {
-          params->failed = true;
-          return false;
-        }
-        resetp = p;
-
-        // Prepare to save start and s across the reset.
-        StateSaver save_start(this, start);
-        StateSaver save_s(this, s);
-
-        // Discard all the States in the cache.
-        ResetCache(params->cache_lock);
-
-        // Restore start and s so we can continue.
-        if ((start = save_start.Restore()) == NULL ||
-            (s = save_s.Restore()) == NULL) {
-          // Restore already did LOG(DFATAL).
-          params->failed = true;
-          return false;
-        }
         ns = RunStateOnByteUnlocked(s, c);
         if (ns == NULL) {
-          LOG(DFATAL) << "RunStateOnByteUnlocked failed after ResetCache";
-          params->failed = true;
-          return false;
+          // After we reset the cache, we hold cache_mutex exclusively,
+          // so if resetp != NULL, it means we filled the DFA state
+          // cache with this search alone (without any other threads).
+          // Benchmarks show that doing a state computation on every
+          // byte runs at about 0.2 MB/s, while the NFA (nfa.cc) can do the
+          // same at about 2 MB/s.  Unless we're processing an average
+          // of 10 bytes per state computation, fail so that RE2 can
+          // fall back to the NFA.
+          if (dfa_should_bail_when_slow && resetp != NULL &&
+              static_cast<size_t>(p - resetp) < 10*state_cache_.size()) {
+            params->failed = true;
+            return false;
+          }
+          resetp = p;
+
+          // Prepare to save start and s across the reset.
+          StateSaver save_start(this, start);
+          StateSaver save_s(this, s);
+
+          // Discard all the States in the cache.
+          ResetCache(params->cache_lock);
+
+          // Restore start and s so we can continue.
+          if ((start = save_start.Restore()) == NULL ||
+              (s = save_s.Restore()) == NULL) {
+            // Restore already did LOG(DFATAL).
+            params->failed = true;
+            return false;
+          }
+          ns = RunStateOnByteUnlocked(s, c);
+          if (ns == NULL) {
+            LOG(DFATAL) << "RunStateOnByteUnlocked failed after ResetCache";
+            params->failed = true;
+            return false;
+          }
+        }
+      }
+      if (ns <= SpecialStateMax) {
+        if (ns == DeadState) {
+          params->ep = reinterpret_cast<const char*>(lastmatch);
+          return matched;
+        }
+        // FullMatchState
+        params->ep = reinterpret_cast<const char*>(ep);
+        return true;
+      }
+      s = ns;
+
+      if (s->IsMatch()) {
+        matched = true;
+        // The DFA notices the match one byte late,
+        // so adjust p before using it in the match.
+        if (run_forward)
+          lastmatch = p - 1;
+        else
+          lastmatch = p + 1;
+        if (ExtraDebug)
+          fprintf(stderr, "match @%td! [%s]\n",
+                  lastmatch - bp, DumpState(s).c_str());
+
+        if (want_earliest_match) {
+          params->ep = reinterpret_cast<const char*>(lastmatch);
+          return true;
         }
       }
     }
-    if (ns <= SpecialStateMax) {
-      if (ns == DeadState) {
-        params->ep = reinterpret_cast<const char*>(lastmatch);
-        return matched;
-      }
-      // FullMatchState
-      params->ep = reinterpret_cast<const char*>(ep);
-      return true;
+    if (p != ep) break;
+    if (run_forward) {
+      piece = piece->next();
+    } else {
+      piece = piece->prev();
     }
-    s = ns;
+    if (!piece) break;
 
-    if (s->IsMatch()) {
-      matched = true;
-      // The DFA notices the match one byte late,
-      // so adjust p before using it in the match.
-      if (run_forward)
-        lastmatch = p - 1;
-      else
-        lastmatch = p + 1;
-      if (ExtraDebug)
-        fprintf(stderr, "match @%td! [%s]\n",
-                lastmatch - bp, DumpState(s).c_str());
-
-      if (want_earliest_match) {
-        params->ep = reinterpret_cast<const char*>(lastmatch);
-        return true;
-      }
+    bp = BytePtr(piece->begin());  // start of text
+    p = bp;                        // text scanning point
+    ep = BytePtr(piece->end());    // end of text
+    resetp = NULL;                 // p at last cache reset
+    if (!run_forward) {
+      using std::swap;
+      swap(p, ep);
     }
   }
 
   // Process one more byte to see if it triggers a match.
   // (Remember, matches are delayed one byte.)
   int lastbyte;
-  if (run_forward) {
-    if (params->text.end() == params->context.end())
-      lastbyte = kByteEndText;
-    else
-      lastbyte = params->text.end()[0] & 0xFF;
-  } else {
-    if (params->text.begin() == params->context.begin())
-      lastbyte = kByteEndText;
-    else
-      lastbyte = params->text.begin()[-1] & 0xFF;
+  if (piece) {
+    if (run_forward) {
+      if (piece->end() == params->context.end())
+        lastbyte = kByteEndText;
+      else
+        lastbyte = params->text.end()[0] & 0xFF;
+    } else {
+      if (piece->begin() == params->context.begin())
+        lastbyte = kByteEndText;
+      else
+        lastbyte = params->text.begin()[-1] & 0xFF;
+    }
   }
 
   State* ns = s->next_[ByteMap(lastbyte)].load(std::memory_order_acquire);
