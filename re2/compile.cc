@@ -1266,8 +1266,17 @@ Prog* Compiler::CompileSet(const RE2::Options& options, RE2::Anchor anchor,
   // Make sure DFA has enough memory to operate,
   // since we're not going to fall back to the NFA.
   bool dfa_failed = false;
-  StringPiece sp = "hello, world";
-  prog->SearchDFA(sp, sp, Prog::kAnchored, Prog::kManyMatch,
+
+  const char* text = "hello, world";
+  PGTextBuffer buffer1;
+  buffer1.buffer = (char*) text;
+  buffer1.current_size = strlen(buffer1.buffer);
+  PGRegexContext context;
+  context.start_buffer = &buffer1;
+  context.start_position = 0;
+  context.end_buffer = &buffer1;
+  context.end_position = buffer1.current_size - 1;
+  prog->SearchDFA(context, context, Prog::kAnchored, Prog::kManyMatch,
                   NULL, &dfa_failed, NULL);
   if (dfa_failed) {
     delete prog;

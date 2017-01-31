@@ -644,7 +644,7 @@ bool PCRE::DoMatchImpl(const StringPiece& text,
   return true;
 }
 
-bool PCRE::DoMatch(const StringPiece& text,
+bool PCRE::DoMatch(const PGRegexContext& text,
                    Anchor anchor,
                    size_t* consumed,
                    const Arg* const args[],

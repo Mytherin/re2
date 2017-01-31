@@ -440,7 +440,7 @@ class PCRE {
 
   // General matching routine.  Stores the length of the match in
   // "*consumed" if successful.
-  bool DoMatch(const StringPiece& text,
+  bool DoMatch(const PGRegexContext& text,
                Anchor anchor,
                size_t* consumed,
                const Arg* const* args, int n) const;

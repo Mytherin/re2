@@ -319,25 +319,25 @@ class RE2 {
   // valid number):
   //    int number;
   //    RE2::FullMatch("abc", "[a-z]+(\\d+)?", &number);
-  static bool FullMatchN(const StringPiece& text, const RE2& re,
+  static bool FullMatchN(const PGRegexContext& text, const RE2& re,
                          const Arg* const args[], int argc);
 
   // Exactly like FullMatch(), except that "re" is allowed to match
   // a substring of "text".
-  static bool PartialMatchN(const StringPiece& text, const RE2& re,
-                            const Arg* const args[], int argc);
+  static bool PartialMatchN(const PGRegexContext& text, const RE2& re,
+                        const Arg* const args[], int n);
 
   // Like FullMatch() and PartialMatch(), except that "re" has to match
   // a prefix of the text, and "input" is advanced past the matched
   // text.  Note: "input" is modified iff this routine returns true.
-  static bool ConsumeN(StringPiece* input, const RE2& re,
+  static bool ConsumeN(PGRegexContext* input, const RE2& re,
                        const Arg* const args[], int argc);
 
   // Like Consume(), but does not anchor the match at the beginning of
   // the text.  That is, "re" need not start its match at the beginning
   // of "input".  For example, "FindAndConsume(s, "(\\w+)", &word)" finds
   // the next word in "s" and stores it in "word".
-  static bool FindAndConsumeN(StringPiece* input, const RE2& re,
+  static bool FindAndConsumeN(PGRegexContext* input, const RE2& re,
                               const Arg* const args[], int argc);
 
 #ifndef SWIG
@@ -361,22 +361,22 @@ class RE2 {
   // (above) constructs the array of pointers to the temporary Arg objects.
 
   template <typename... A>
-  static bool FullMatch(const StringPiece& text, const RE2& re, A&&... a) {
+  static bool FullMatch(const PGRegexContext& text, const RE2& re, A&&... a) {
     return Apply(FullMatchN, text, re, Arg(std::forward<A>(a))...);
   }
 
   template <typename... A>
-  static bool PartialMatch(const StringPiece& text, const RE2& re, A&&... a) {
+  static bool PartialMatch(const PGRegexContext& text, const RE2& re, A&&... a) {
     return Apply(PartialMatchN, text, re, Arg(std::forward<A>(a))...);
   }
 
   template <typename... A>
-  static bool Consume(StringPiece* input, const RE2& re, A&&... a) {
+  static bool Consume(PGRegexContext* input, const RE2& re, A&&... a) {
     return Apply(ConsumeN, input, re, Arg(std::forward<A>(a))...);
   }
 
   template <typename... A>
-  static bool FindAndConsume(StringPiece* input, const RE2& re, A&&... a) {
+  static bool FindAndConsume(PGRegexContext* input, const RE2& re, A&&... a) {
     return Apply(FindAndConsumeN, input, re, Arg(std::forward<A>(a))...);
   }
 #endif
@@ -497,11 +497,9 @@ class RE2 {
   // empty string, but note that on return, it will not be possible to tell
   // whether submatch i matched the empty string or did not match:
   // either way, match[i].data() == NULL.
-  bool Match(const StringPiece& text,
-             size_t startpos,
-             size_t endpos,
+  bool Match(const PGRegexContext& text,
              Anchor anchor,
-             StringPiece *match,
+             PGRegexContext *match,
              int nmatch) const;
 
   // Check that the given rewrite string is suitable for use with this
@@ -712,7 +710,7 @@ class RE2 {
  private:
   void Init(const StringPiece& pattern, const Options& options);
 
-  bool DoMatch(const StringPiece& text,
+  bool DoMatch(const PGRegexContext& text,
                Anchor anchor,
                size_t* consumed,
                const Arg* const args[],

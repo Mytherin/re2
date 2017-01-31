@@ -25,6 +25,77 @@
 #include <iosfwd>
 #include <iterator>
 #include <string>
+#include <malloc.h>
+
+typedef size_t ulng;
+typedef ssize_t lng;
+
+struct PGTextBuffer {
+public:
+  char* buffer = nullptr;
+  ulng current_size = 0;
+
+  PGTextBuffer* prev = nullptr;
+  PGTextBuffer* next = nullptr;
+};
+
+struct PGRegexContext {
+  PGTextBuffer* start_buffer;
+  lng start_position;
+  PGTextBuffer* end_buffer;
+  lng end_position;
+
+  PGRegexContext() : start_buffer(nullptr), start_position(0), end_buffer(nullptr), end_position(0) { }
+
+  std::string GetString() const {
+    if (!start_buffer || !end_buffer) {
+      return std::string();
+    }
+    size_t size = 0;
+    PGTextBuffer* buffer = start_buffer;
+    lng position = start_position;
+    while(buffer != end_buffer) {
+      size += buffer->current_size - position;
+      position = 0;
+      buffer = buffer->next;
+    }
+    size += end_position - position;
+    char* data = (char*) malloc(size * sizeof(char) + 1);
+    char* current_data = data;
+    buffer = start_buffer;
+    position = start_position;
+    while(buffer != end_buffer) {
+      size_t size = buffer->current_size - position;
+      memcpy(current_data, buffer->buffer + position, size);
+      current_data += size;
+      position = 0;
+      buffer = buffer->next;
+    }
+    memcpy(current_data, buffer->buffer + position, end_position - position);
+    std::string result = std::string(data, size);
+    free(data);
+    return result;
+  }
+
+  char* begin() const { return start_buffer->buffer + start_position; }
+  char* end_start() const { return 
+    start_buffer == end_buffer ? 
+    start_buffer->buffer + end_position : 
+    start_buffer->buffer + start_buffer->current_size; }
+  char* end() const { return end_buffer->buffer + end_position; }
+
+  void remove_prefix(size_t length);
+};
+
+struct PGTextPosition {
+  PGTextBuffer* buffer;
+  lng position;
+
+  char* data() { return buffer->buffer + position; }
+
+  PGTextPosition() : buffer(nullptr), position(0) { }
+  PGTextPosition(PGTextBuffer* buffer) : buffer(buffer), position(0) { }
+};
 
 namespace re2 {
 
@@ -47,13 +118,13 @@ class StringPiece {
   // in a "const char*" or a "string" wherever a "StringPiece" is
   // expected.
   StringPiece()
-      : data_(NULL), size_(0), GetPrev(nullptr), GetNext(nullptr) {}
+      : data_(NULL), size_(0) {}
   StringPiece(const std::string& str)
-      : data_(str.data()), size_(str.size()), GetPrev(nullptr), GetNext(nullptr) {}
+      : data_(str.data()), size_(str.size()) {}
   StringPiece(const char* str)
-      : data_(str), size_(str == NULL ? 0 : strlen(str)), GetPrev(nullptr), GetNext(nullptr) {}
+      : data_(str), size_(str == NULL ? 0 : strlen(str)) {}
   StringPiece(const char* str, size_type len)
-      : data_(str), size_(len), GetPrev(nullptr), GetNext(nullptr) {}
+      : data_(str), size_(len) {}
 
   const_iterator begin() const { return data_; }
   const_iterator end() const { return data_ + size_; }
@@ -148,28 +219,9 @@ class StringPiece {
   size_type rfind(const StringPiece& s, size_type pos = npos) const;
   size_type rfind(char c, size_type pos = npos) const;
 
-  void bla();
-
-  StringPiece* prev() {
-    if (GetPrev == nullptr) {
-      return nullptr;
-    }
-    return GetPrev(this);
-  }
-
-  StringPiece* next() {
-    if (GetNext == nullptr) {
-      return nullptr;
-    }
-    return GetNext(this);
-  }
  private:
   const_pointer data_;
   size_type size_;
- public:
-  StringPiece* (*GetPrev)(StringPiece* current) = nullptr;
-  StringPiece* (*GetNext)(StringPiece* current) = nullptr;
-  void* extra_data = nullptr;
 };
 
 inline bool operator==(const StringPiece& x, const StringPiece& y) {

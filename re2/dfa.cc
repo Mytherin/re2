@@ -92,9 +92,14 @@ class DFA {
   //   returning the leftmost end of the match instead of the rightmost one.
   // If the DFA cannot complete the search (for example, if it is out of
   //   memory), it sets *failed and returns false.
-  bool Search(const StringPiece& text, const StringPiece& context,
-              bool anchored, bool want_earliest_match, bool run_forward,
-              bool* failed, const char** ep, std::vector<int>* matches);
+  bool Search(const PGRegexContext& text,
+                 const PGRegexContext& context,
+                 bool anchored,
+                 bool want_earliest_match,
+                 bool run_forward,
+                 bool* failed,
+                 PGTextPosition* epp,
+                 std::vector<int>* matches);
 
   // Builds out all states for the entire DFA.  FOR TESTING ONLY
   // Returns number of states.
@@ -246,7 +251,7 @@ class DFA {
 
   // Search parameters
   struct SearchParams {
-    SearchParams(const StringPiece& text, const StringPiece& context,
+    SearchParams(const PGRegexContext& text, const PGRegexContext& context,
                  RWLocker* cache_lock)
       : text(text), context(context),
         anchored(false),
@@ -259,8 +264,8 @@ class DFA {
         ep(NULL),
         matches(NULL) { }
 
-    StringPiece text;
-    StringPiece context;
+    PGRegexContext text;
+    PGRegexContext context;
     bool anchored;
     bool want_earliest_match;
     bool run_forward;
@@ -268,7 +273,7 @@ class DFA {
     int firstbyte;
     RWLocker *cache_lock;
     bool failed;     // "out" parameter: whether search gave up
-    const char* ep;  // "out" parameter: end pointer for match
+    PGTextPosition ep;  // "out" parameter: end pointer for match
     std::vector<int>* matches;
 
    private:
@@ -1300,35 +1305,48 @@ inline bool DFA::InlinedSearchLoop(SearchParams* params,
                                    bool want_earliest_match,
                                    bool run_forward) {
   State* start = params->start;
-  StringPiece* piece = &params->text;
-  const uint8_t* bp = BytePtr(piece->begin());  // start of text
-  const uint8_t* p = bp;                              // text scanning point
-  const uint8_t* ep = BytePtr(piece->end());    // end of text
-  const uint8_t* resetp = NULL;                       // p at last cache reset
+  PGRegexContext* piece = &params->text;
+  PGTextBuffer* current_buffer;
+  const uint8_t* bp;            // start of text
+  const uint8_t* p;             // text scanning point
+  const uint8_t* ep;            // end of text
+  const uint8_t* resetp = NULL; // p at last cache reset
   if (!run_forward) {
-    using std::swap;
-    swap(p, ep);
+    current_buffer = piece->end_buffer;
+    bp = (const uint8_t*) current_buffer->buffer + piece->end_position;
+    p = bp;
+    ep = (const uint8_t*) current_buffer->buffer;
+  } else {
+    current_buffer = piece->start_buffer;
+    bp = (const uint8_t*) current_buffer->buffer + piece->start_position;
+    p = bp;
+    ep = (const uint8_t*) current_buffer->buffer + current_buffer->current_size;
   }
 
   const uint8_t* bytemap = prog_->bytemap();
-  const uint8_t* lastmatch = NULL;   // most recent matching position in text
+  PGTextPosition lastmatch;   // most recent matching position in text
   bool matched = false;
   State* s = start;
 
   if (s->IsMatch()) {
     matched = true;
-    lastmatch = p;
+    if (run_forward) {
+      lastmatch.buffer = piece->start_buffer;
+      lastmatch.position = piece->start_position;
+    } else {
+      lastmatch.buffer = piece->end_buffer;
+      lastmatch.position = piece->end_position;
+    }
     if (want_earliest_match) {
-      params->ep = reinterpret_cast<const char*>(lastmatch);
+      params->ep = lastmatch;
       return true;
     }
   }
 
+  lastmatch.buffer = nullptr;
+  lastmatch.position = 0;
   while(1) {
     while (p != ep) {
-      if (ExtraDebug)
-        fprintf(stderr, "@%td: %s\n",
-                p - bp, DumpState(s).c_str());
       if (have_firstbyte && s == start) {
         // In start state, only way out is to find firstbyte,
         // so use optimized assembly in memchr to skip ahead.
@@ -1415,11 +1433,12 @@ inline bool DFA::InlinedSearchLoop(SearchParams* params,
       }
       if (ns <= SpecialStateMax) {
         if (ns == DeadState) {
-          params->ep = reinterpret_cast<const char*>(lastmatch);
+          params->ep = lastmatch;
           return matched;
         }
         // FullMatchState
-        params->ep = reinterpret_cast<const char*>(ep);
+        params->ep.buffer = current_buffer;
+        params->ep.position = (char*) ep - current_buffer->buffer;
         return true;
       }
       s = ns;
@@ -1428,42 +1447,51 @@ inline bool DFA::InlinedSearchLoop(SearchParams* params,
         matched = true;
         // The DFA notices the match one byte late,
         // so adjust p before using it in the match.
-        if (run_forward)
-          lastmatch = p - 1;
-        else
-          lastmatch = p + 1;
-        if (ExtraDebug)
-          fprintf(stderr, "match @%td! [%s]\n",
-                  lastmatch - bp, DumpState(s).c_str());
+        if (run_forward) {
+          lastmatch.buffer = current_buffer;
+          lastmatch.position = (char*) p - current_buffer->buffer - 1;
+        }
+        else {
+          lastmatch.buffer = current_buffer;
+          lastmatch.position = (char*) p - current_buffer->buffer + 1;
+        }
+        assert(lastmatch.position >= 0);
 
         if (want_earliest_match) {
-          params->ep = reinterpret_cast<const char*>(lastmatch);
+          params->ep = lastmatch;
           return true;
         }
       }
     }
     if (p != ep) break;
+    PGTextBuffer* next_buffer;
     if (run_forward) {
-      piece = piece->next();
+      next_buffer = current_buffer->next;
     } else {
-      piece = piece->prev();
+      next_buffer = current_buffer->prev;
     }
-    if (!piece) break;
+    if (!next_buffer) break;
+    current_buffer = next_buffer;
 
-    bp = BytePtr(piece->begin());  // start of text
-    p = bp;                        // text scanning point
-    ep = BytePtr(piece->end());    // end of text
-    resetp = NULL;                 // p at last cache reset
-    if (!run_forward) {
-      using std::swap;
-      swap(p, ep);
+    if (run_forward) {
+      bp = (const uint8_t*) current_buffer->buffer;
+      p = bp;
+      ep = (const uint8_t*) (current_buffer == piece->end_buffer ? 
+        current_buffer->buffer + piece->end_position : 
+        current_buffer->buffer + current_buffer->current_size);
+    } else {
+      bp = (const uint8_t*) current_buffer->buffer + current_buffer->current_size;
+      p = bp;
+      ep = (const uint8_t*) (current_buffer == piece->start_buffer ? 
+        current_buffer->buffer + piece->start_position : 
+        current_buffer->buffer);
     }
   }
 
   // Process one more byte to see if it triggers a match.
   // (Remember, matches are delayed one byte.)
   int lastbyte;
-  if (piece) {
+  if (current_buffer) {
     if (run_forward) {
       if (piece->end() == params->context.end())
         lastbyte = kByteEndText;
@@ -1499,12 +1527,14 @@ inline bool DFA::InlinedSearchLoop(SearchParams* params,
   if (ExtraDebug)
     fprintf(stderr, "@_: %s\n", DumpState(s).c_str());
   if (s == FullMatchState) {
-    params->ep = reinterpret_cast<const char*>(ep);
+    params->ep.buffer = current_buffer;
+    params->ep.position = (char*) ep - current_buffer->buffer;
     return true;
   }
   if (s > SpecialStateMax && s->IsMatch()) {
     matched = true;
-    lastmatch = p;
+    lastmatch.buffer = current_buffer;
+    lastmatch.position = (char*) ep - current_buffer->buffer;
     if (params->matches && kind_ == Prog::kManyMatch) {
       std::vector<int>* v = params->matches;
       v->clear();
@@ -1519,11 +1549,8 @@ inline bool DFA::InlinedSearchLoop(SearchParams* params,
         }
       }
     }
-    if (ExtraDebug)
-      fprintf(stderr, "match @%td! [%s]\n",
-              lastmatch - bp, DumpState(s).c_str());
   }
-  params->ep = reinterpret_cast<const char*>(lastmatch);
+  params->ep = lastmatch;
   return matched;
 }
 
@@ -1612,15 +1639,16 @@ bool DFA::FastSearchLoop(SearchParams* params) {
 // state for the DFA search loop.  Fills in params and returns true on success.
 // Returns false on failure.
 bool DFA::AnalyzeSearch(SearchParams* params) {
-  const StringPiece& text = params->text;
-  const StringPiece& context = params->context;
+  const PGRegexContext& text = params->text;
+  const PGRegexContext& context = params->context;
 
   // Sanity check: make sure that text lies within context.
+  /*
   if (text.begin() < context.begin() || text.end() > context.end()) {
     LOG(DFATAL) << "context does not contain text";
     params->start = DeadState;
     return true;
-  }
+  }*/
 
   // Determine correct search type.
   int start;
@@ -1742,27 +1770,21 @@ bool DFA::AnalyzeSearchHelper(SearchParams* params, StartInfo* info,
 }
 
 // The actual DFA search: calls AnalyzeSearch and then FastSearchLoop.
-bool DFA::Search(const StringPiece& text,
-                 const StringPiece& context,
+bool DFA::Search(const PGRegexContext& text,
+                 const PGRegexContext& context,
                  bool anchored,
                  bool want_earliest_match,
                  bool run_forward,
                  bool* failed,
-                 const char** epp,
+                 PGTextPosition* epp,
                  std::vector<int>* matches) {
-  *epp = NULL;
+  epp->buffer = nullptr;
+  epp->position = 0;
   if (!ok()) {
     *failed = true;
     return false;
   }
   *failed = false;
-
-  if (ExtraDebug) {
-    fprintf(stderr, "\nprogram:\n%s\n", prog_->DumpUnanchored().c_str());
-    fprintf(stderr, "text %s anchored=%d earliest=%d fwd=%d kind %d\n",
-            text.ToString().c_str(), anchored, want_earliest_match,
-            run_forward, kind_);
-  }
 
   RWLocker l(&cache_mutex_);
   SearchParams params(text, context, &l);
@@ -1778,14 +1800,16 @@ bool DFA::Search(const StringPiece& text,
   if (params.start == DeadState)
     return false;
   if (params.start == FullMatchState) {
-    if (run_forward == want_earliest_match)
-      *epp = text.begin();
-    else
-      *epp = text.end();
+    if (run_forward == want_earliest_match) {
+      epp->buffer = text.start_buffer;
+      epp->position = text.start_position;
+    }
+    else {
+      epp->buffer = text.end_buffer;
+      epp->position = text.end_position;
+    }
     return true;
   }
-  if (ExtraDebug)
-    fprintf(stderr, "start %s\n", DumpState(params.start).c_str());
   bool ret = FastSearchLoop(&params);
   if (params.failed) {
     *failed = true;
@@ -1838,12 +1862,12 @@ void Prog::DeleteDFA(DFA* dfa) {
 //
 // This is the only external interface (class DFA only exists in this file).
 //
-bool Prog::SearchDFA(const StringPiece& text, const StringPiece& const_context,
-                     Anchor anchor, MatchKind kind, StringPiece* match0,
+bool Prog::SearchDFA(const PGRegexContext& text, const PGRegexContext& const_context,
+                     Anchor anchor, MatchKind kind, PGRegexContext* match0,
                      bool* failed, std::vector<int>* matches) {
   *failed = false;
 
-  StringPiece context = const_context;
+  PGRegexContext context = const_context;
   if (context.begin() == NULL)
     context = text;
   bool carat = anchor_start();
@@ -1879,7 +1903,7 @@ bool Prog::SearchDFA(const StringPiece& text, const StringPiece& const_context,
   }
 
   DFA* dfa = GetDFA(kind);
-  const char* ep;
+  PGTextPosition ep;
   bool matched = dfa->Search(text, context, anchored,
                              want_shortest_match, !reversed_,
                              failed, &ep, matches);
@@ -1887,18 +1911,25 @@ bool Prog::SearchDFA(const StringPiece& text, const StringPiece& const_context,
     return false;
   if (!matched)
     return false;
-  if (endmatch && ep != (reversed_ ? text.begin() : text.end()))
+  if (endmatch && ep.data() != (reversed_ ? text.begin() : text.end()))
     return false;
 
   // If caller cares, record the boundary of the match.
   // We only know where it ends, so use the boundary of text
   // as the beginning.
   if (match0) {
-    if (reversed_)
-      *match0 = StringPiece(ep, static_cast<size_t>(text.end() - ep));
-    else
-      *match0 =
-          StringPiece(text.begin(), static_cast<size_t>(ep - text.begin()));
+    if (reversed_) {
+      match0->end_buffer = text.end_buffer;
+      match0->end_position = text.end_position;
+      match0->start_buffer = ep.buffer;
+      match0->start_position = ep.position;
+    }
+    else {
+      match0->start_buffer = text.start_buffer;
+      match0->start_position = text.start_position;
+      match0->end_buffer = ep.buffer;
+      match0->end_position = ep.position;
+    }
   }
   return true;
 }
@@ -1911,7 +1942,7 @@ int DFA::BuildAllStates() {
   // Pick out start state for unanchored search
   // at beginning of text.
   RWLocker l(&cache_mutex_);
-  SearchParams params(StringPiece(), StringPiece(), &l);
+  SearchParams params(PGRegexContext(), PGRegexContext(), &l);
   params.anchored = false;
   if (!AnalyzeSearch(&params) || params.start <= SpecialStateMax)
     return 0;
@@ -1970,7 +2001,7 @@ bool DFA::PossibleMatchRange(string* min, string* max, int maxlen) {
 
   // Pick out start state for anchored search at beginning of text.
   RWLocker l(&cache_mutex_);
-  SearchParams params(StringPiece(), StringPiece(), &l);
+  SearchParams params(PGRegexContext(), PGRegexContext(), &l);
   params.anchored = true;
   if (!AnalyzeSearch(&params))
     return false;

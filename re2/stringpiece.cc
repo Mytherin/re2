@@ -8,6 +8,23 @@
 
 #include "util/util.h"
 
+void PGRegexContext::remove_prefix(size_t length) {
+  while(start_buffer) {
+    size_t buffer_left = start_buffer->current_size - start_position;
+    if (length > buffer_left) {
+      length -= buffer_left;
+      start_buffer = start_buffer->next;
+      start_position = 0;
+    } else {
+      start_position += length;
+      return;
+    }
+  }
+  // prefix was longer than the buffer
+  start_buffer = nullptr;
+  start_position = 0;
+}
+
 namespace re2 {
 
 const StringPiece::size_type StringPiece::npos;  // initialized in stringpiece.h
@@ -23,10 +40,6 @@ StringPiece StringPiece::substr(size_type pos, size_type n) const {
   if (pos > size_) pos = size_;
   if (n > size_ - pos) n = size_ - pos;
   return StringPiece(data_ + pos, n);
-}
-
-void StringPiece::bla() {
-
 }
 
 StringPiece::size_type StringPiece::find(const StringPiece& s,
