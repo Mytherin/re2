@@ -58,9 +58,9 @@ class NFA {
   // Submatch[0] is the entire match.  When there is a choice in
   // which text matches each subexpression, the submatch boundaries
   // are chosen to match what a backtracking implementation would choose.
-  bool Search(const StringPiece& text, const StringPiece& context,
+  bool Search(const PGRegexContext& text, const PGRegexContext& context,
               bool anchored, bool longest,
-              StringPiece* submatch, int nsubmatch);
+              PGRegexContext* submatch, int nsubmatch);
 
  private:
   struct Thread {
@@ -68,7 +68,7 @@ class NFA {
       int ref;
       Thread* next;  // when on free list
     };
-    const char** capture;
+    PGTextPosition* capture;
   };
 
   // State for explicit stack in AddToThreadq.
@@ -97,7 +97,7 @@ class NFA {
   // Enqueues only the ByteRange instructions that match byte c.
   // The bits in flag (Bol, Eol, etc.) specify whether ^, $ and \b match.
   // p is the current input position, and t0 is the current thread.
-  void AddToThreadq(Threadq* q, int id0, int c, int flag,
+  void AddToThreadq(Threadq* q, int id0, int c, int flag, PGTextBuffer* current_buffer,
                     const char* p, Thread* t0);
 
   // Run runq on byte c, appending new states to nextq.
@@ -108,12 +108,12 @@ class NFA {
   // ^, $ and \b match the current input position (after c).
   // Frees all the threads on runq.
   // If there is a shortcut to the end, returns that shortcut.
-  inline int Step(Threadq* runq, Threadq* nextq, int c, int flag, const char* p);
+  inline int Step(Threadq* runq, Threadq* nextq, int c, int flag, PGTextBuffer* current_buffer, const char* p);
 
   // Returns text version of capture information, for debugging.
   string FormatCapture(const char** capture);
 
-  inline void CopyCapture(const char** dst, const char** src);
+  inline void CopyCapture(PGTextPosition* dst, const PGTextPosition* src);
 
   Prog* prog_;          // underlying program
   int start_;           // start instruction in program
@@ -123,7 +123,7 @@ class NFA {
   const char* btext_;   // beginning of text being matched (for FormatSubmatch)
   const char* etext_;   // end of text being matched (for endmatch_)
   Threadq q0_, q1_;     // pre-allocated for Search.
-  const char** match_;  // best match so far
+  PGTextPosition* match_;  // best match so far
   bool matched_;        // any match so far?
   AddState* astack_;    // pre-allocated for AddToThreadq
   int nastack_;
@@ -170,7 +170,7 @@ NFA::Thread* NFA::AllocThread() {
   if (t == NULL) {
     t = new Thread;
     t->ref = 1;
-    t->capture = new const char*[ncapture_];
+    t->capture = new PGTextPosition[ncapture_];
     return t;
   }
   free_threads_ = t->next;
@@ -195,7 +195,7 @@ void NFA::Decref(Thread* t) {
   free_threads_ = t;
 }
 
-void NFA::CopyCapture(const char** dst, const char** src) {
+void NFA::CopyCapture(PGTextPosition* dst, const PGTextPosition* src) {
   for (int i = 0; i < ncapture_; i+=2) {
     dst[i] = src[i];
     dst[i+1] = src[i+1];
@@ -206,7 +206,7 @@ void NFA::CopyCapture(const char** dst, const char** src) {
 // Enqueues only the ByteRange instructions that match byte c.
 // The bits in flag (Bol, Eol, etc.) specify whether ^, $ and \b match.
 // p is the current input position, and t0 is the current thread.
-void NFA::AddToThreadq(Threadq* q, int id0, int c, int flag,
+void NFA::AddToThreadq(Threadq* q, int id0, int c, int flag, PGTextBuffer* current_buffer,
                        const char* p, Thread* t0) {
   if (id0 == 0)
     return;
@@ -238,8 +238,6 @@ void NFA::AddToThreadq(Threadq* q, int id0, int c, int flag,
     if (id == 0)
       continue;
     if (q->has_index(id)) {
-      if (ExtraDebug)
-        fprintf(stderr, "  [%d%s]\n", id, FormatCapture(t0->capture).c_str());
       continue;
     }
 
@@ -289,7 +287,8 @@ void NFA::AddToThreadq(Threadq* q, int id0, int c, int flag,
         // Record capture.
         t = AllocThread();
         CopyCapture(t->capture, t0->capture);
-        t->capture[j] = p;
+        t->capture[j].buffer = current_buffer;
+        t->capture[j].position = p - current_buffer->buffer;
         t0 = t;
       }
       a = AddState(ip->out());
@@ -304,8 +303,6 @@ void NFA::AddToThreadq(Threadq* q, int id0, int c, int flag,
       // Save state; will pick up at next byte.
       t = Incref(t0);
       *tp = t;
-      if (ExtraDebug)
-        fprintf(stderr, " + %d%s\n", id, FormatCapture(t0->capture).c_str());
 
     Next:
       if (ip->last())
@@ -334,7 +331,7 @@ void NFA::AddToThreadq(Threadq* q, int id0, int c, int flag,
 // ^, $ and \b match the current input position (after c).
 // Frees all the threads on runq.
 // If there is a shortcut to the end, returns that shortcut.
-int NFA::Step(Threadq* runq, Threadq* nextq, int c, int flag, const char* p) {
+int NFA::Step(Threadq* runq, Threadq* nextq, int c, int flag, PGTextBuffer* current_buffer, const char* p) {
   nextq->clear();
 
   for (Threadq::iterator i = runq->begin(); i != runq->end(); ++i) {
@@ -360,7 +357,7 @@ int NFA::Step(Threadq* runq, Threadq* nextq, int c, int flag, const char* p) {
         break;
 
       case kInstByteRange:
-        AddToThreadq(nextq, ip->out(), c, flag, p+1, t);
+        AddToThreadq(nextq, ip->out(), c, flag, current_buffer, p + 1, t);
         break;
 
       case kInstAltMatch:
@@ -390,16 +387,18 @@ int NFA::Step(Threadq* runq, Threadq* nextq, int c, int flag, const char* p) {
           // it is either farther to the left or at the same
           // point but longer than an existing match.
           if (!matched_ || t->capture[0] < match_[0] ||
-              (t->capture[0] == match_[0] && p > match_[1])) {
+              (t->capture[0] == match_[0] && PGTextPosition(current_buffer, p) > match_[1])) {
             CopyCapture(match_, t->capture);
-            match_[1] = p;
+            match_[1].buffer = current_buffer;
+            match_[1].position = p - current_buffer->buffer;
             matched_ = true;
           }
         } else {
           // Leftmost-biased mode: this match is by definition
           // better than what we've already found (see next line).
           CopyCapture(match_, t->capture);
-          match_[1] = p;
+          match_[1].buffer = current_buffer;
+          match_[1].position = p - current_buffer->buffer;
           matched_ = true;
 
           // Cut off the threads that can only find matches
@@ -435,18 +434,18 @@ string NFA::FormatCapture(const char** capture) {
   return s;
 }
 
-bool NFA::Search(const StringPiece& text, const StringPiece& const_context,
+bool NFA::Search(const PGRegexContext& text, const PGRegexContext& const_context,
             bool anchored, bool longest,
-            StringPiece* submatch, int nsubmatch) {
+            PGRegexContext* submatch, int nsubmatch) {
   if (start_ == 0)
     return false;
 
-  StringPiece context = const_context;
+  PGRegexContext context = const_context;
   if (context.begin() == NULL)
     context = text;
 
   // Sanity check: make sure that text lies within context.
-  if (text.begin() < context.begin() || text.end() > context.end()) {
+  if (text.begin() < context.begin() || text.end() > context.end()) { // FIXME: proper buffer containment check
     LOG(DFATAL) << "context does not contain text";
     return false;
   }
@@ -478,16 +477,11 @@ bool NFA::Search(const StringPiece& text, const StringPiece& const_context,
     ncapture_ = 2;
   }
 
-  match_ = new const char*[ncapture_];
+  match_ = new PGTextPosition[ncapture_];
   matched_ = false;
 
   // For debugging prints.
   btext_ = context.begin();
-
-  if (ExtraDebug)
-    fprintf(stderr, "NFA::Search %s (context: %s) anchored=%d longest=%d\n",
-            text.ToString().c_str(), context.ToString().c_str(), anchored,
-            longest);
 
   // Set up search.
   Threadq* runq = &q0_;
@@ -497,135 +491,140 @@ bool NFA::Search(const StringPiece& text, const StringPiece& const_context,
   memset(&match_[0], 0, ncapture_*sizeof match_[0]);
   int wasword = 0;
 
-  if (text.begin() > context.begin())
-    wasword = Prog::IsWordChar(text.begin()[-1] & 0xFF);
+  if (text.begin() != context.begin())
+    wasword = Prog::IsWordChar(text.begin()[-1] & 0xFF); // FIXME: proper [-1]
+
+  PGTextBuffer* current_buffer = text.start_buffer;
+  const char* p = text.begin();
+  const char* ep = text.start_buffer->buffer + text.start_buffer->current_size;
+  //const char* ep = current_buffer->buffer + (text.start_buffer == text.end_buffer ? text.end_position : current_buffer->current_size);
+  const char* real_end = text.end();
 
   // Loop over the text, stepping the machine.
-  for (const char* p = text.begin();; p++) {
-    // Check for empty-width specials.
-    int flag = 0;
+  while(1) {
+    for (;; p++) {
+      // Check for empty-width specials.
+      int flag = 0;
 
-    // ^ and \A
-    if (p == context.begin())
-      flag |= kEmptyBeginText | kEmptyBeginLine;
-    else if (p <= context.end() && p[-1] == '\n')
-      flag |= kEmptyBeginLine;
-
-    // $ and \z
-    if (p == context.end())
-      flag |= kEmptyEndText | kEmptyEndLine;
-    else if (p < context.end() && p[0] == '\n')
-      flag |= kEmptyEndLine;
-
-    // \b and \B
-    int isword = 0;
-    if (p < context.end())
-      isword = Prog::IsWordChar(p[0] & 0xFF);
-
-    if (isword != wasword)
-      flag |= kEmptyWordBoundary;
-    else
-      flag |= kEmptyNonWordBoundary;
-
-    if (ExtraDebug) {
-      int c = 0;
+      // ^ and \A
       if (p == context.begin())
-        c = '^';
-      else if (p > text.end())
-        c = '$';
-      else if (p < text.end())
-        c = p[0] & 0xFF;
+        flag |= kEmptyBeginText | kEmptyBeginLine;
+      else if (p <= context.end() && p[-1] == '\n')
+        flag |= kEmptyBeginLine;
 
-      fprintf(stderr, "%c[%#x/%d/%d]:", c, flag, isword, wasword);
-      for (Threadq::iterator i = runq->begin(); i != runq->end(); ++i) {
-        Thread* t = i->second;
-        if (t == NULL)
-          continue;
-        fprintf(stderr, " %d%s", i->index(), FormatCapture(t->capture).c_str());
-      }
-      fprintf(stderr, "\n");
-    }
+      // $ and \z
+      if (p == context.end())
+        flag |= kEmptyEndText | kEmptyEndLine;
+      else if (p < context.end() && p[0] == '\n')
+        flag |= kEmptyEndLine;
 
-    // Note that we pass p-1 to Step() because it needs the previous pointer
-    // value in order to handle Match instructions appropriately. It plumbs
-    // c and flag through to AddToThreadq() along with p-1+1, which is p.
-    //
-    // This is a no-op the first time around the loop because runq is empty.
-    int id = Step(runq, nextq, p < text.end() ? p[0] & 0xFF : -1, flag, p-1);
-    DCHECK_EQ(runq->size(), 0);
-    using std::swap;
-    swap(nextq, runq);
-    nextq->clear();
-    if (id != 0) {
-      // We're done: full match ahead.
-      p = text.end();
-      for (;;) {
-        Prog::Inst* ip = prog_->inst(id);
-        switch (ip->opcode()) {
-          default:
-            LOG(DFATAL) << "Unexpected opcode in short circuit: " << ip->opcode();
-            break;
+      // \b and \B
+      int isword = 0;
+      if (p < context.end())
+        isword = Prog::IsWordChar(p[0] & 0xFF);
 
-          case kInstCapture:
-            if (ip->cap() < ncapture_)
-              match_[ip->cap()] = p;
-            id = ip->out();
-            continue;
+      if (isword != wasword)
+        flag |= kEmptyWordBoundary;
+      else
+        flag |= kEmptyNonWordBoundary;
 
-          case kInstNop:
-            id = ip->out();
-            continue;
+      // Note that we pass p-1 to Step() because it needs the previous pointer
+      // value in order to handle Match instructions appropriately. It plumbs
+      // c and flag through to AddToThreadq() along with p-1+1, which is p.
+      //
+      // This is a no-op the first time around the loop because runq is empty.
+      int id = Step(runq, nextq, p != real_end ? p[0] & 0xFF : -1, flag, current_buffer, p - 1);
+      DCHECK_EQ(runq->size(), 0);
+      using std::swap;
+      swap(nextq, runq);
+      nextq->clear();
+      if (id != 0) {
+        // We're done: full match ahead.
+        p = ep;
+        for (;;) {
+          Prog::Inst* ip = prog_->inst(id);
+          switch (ip->opcode()) {
+            default:
+              LOG(DFATAL) << "Unexpected opcode in short circuit: " << ip->opcode();
+              break;
 
-          case kInstMatch:
-            match_[1] = p;
-            matched_ = true;
-            break;
+            case kInstCapture:
+              if (ip->cap() < ncapture_) {
+                match_[ip->cap()].buffer = current_buffer;
+                match_[ip->cap()].position = p - current_buffer->buffer;
+              }
+              id = ip->out();
+              continue;
+
+            case kInstNop:
+              id = ip->out();
+              continue;
+
+            case kInstMatch:
+              match_[1].buffer = current_buffer;
+              match_[1].position = p - current_buffer->buffer;
+              matched_ = true;
+              break;
+          }
+          break;
         }
         break;
       }
-      break;
-    }
 
-    if (p > text.end())
-      break;
+      if (p == ep)
+        break;
 
-    // Start a new thread if there have not been any matches.
-    // (No point in starting a new thread if there have been
-    // matches, since it would be to the right of the match
-    // we already found.)
-    if (!matched_ && (!anchored || p == text.begin())) {
-      // If there's a required first byte for an unanchored search
-      // and we're not in the middle of any possible matches,
-      // use memchr to search for the byte quickly.
-      int fb = prog_->first_byte();
-      if (!anchored && runq->size() == 0 &&
-          fb >= 0 && p < text.end() && (p[0] & 0xFF) != fb) {
-        p = reinterpret_cast<const char*>(memchr(p, fb, text.end() - p));
-        if (p == NULL) {
-          p = text.end();
-          isword = 0;
-        } else {
-          isword = Prog::IsWordChar(p[0] & 0xFF);
+      // Start a new thread if there have not been any matches.
+      // (No point in starting a new thread if there have been
+      // matches, since it would be to the right of the match
+      // we already found.)
+      if (!matched_ && (!anchored || p == text.begin())) {
+        // If there's a required first byte for an unanchored search
+        // and we're not in the middle of any possible matches,
+        // use memchr to search for the byte quickly.
+        int fb = prog_->first_byte();
+        if (!anchored && runq->size() == 0 &&
+            fb >= 0 && p < text.end() && (p[0] & 0xFF) != fb) {
+          p = reinterpret_cast<const char*>(memchr(p, fb, text.end() - p));
+          if (p == NULL) {
+            p = real_end;
+            isword = 0;
+          } else {
+            isword = Prog::IsWordChar(p[0] & 0xFF);
+          }
+          flag = Prog::EmptyFlags(context, p);
         }
-        flag = Prog::EmptyFlags(context, p);
+
+        Thread* t = AllocThread();
+        CopyCapture(t->capture, match_);
+        t->capture[0] = PGTextPosition(current_buffer, p);
+        AddToThreadq(runq, start_, p != real_end ? p[0] & 0xFF : -1, flag, current_buffer, p, t);
+        Decref(t);
       }
 
-      Thread* t = AllocThread();
-      CopyCapture(t->capture, match_);
-      t->capture[0] = p;
-      AddToThreadq(runq, start_, p < text.end() ? p[0] & 0xFF : -1, flag, p, t);
-      Decref(t);
-    }
+      // If all the threads have died, stop early.
+      if (runq->size() == 0) {
+        if (ExtraDebug)
+          fprintf(stderr, "dead\n");
+        break;
+      }
 
-    // If all the threads have died, stop early.
-    if (runq->size() == 0) {
-      if (ExtraDebug)
-        fprintf(stderr, "dead\n");
-      break;
+      wasword = isword;
     }
+    if (p != ep) break;
+    if (current_buffer == text.end_buffer) break;
 
-    wasword = isword;
+    PGTextBuffer* next_buffer = current_buffer->next;
+    if (!next_buffer) break;
+    current_buffer = next_buffer;
+
+    p = current_buffer->buffer;
+    ep = (current_buffer == text.end_buffer ? 
+      current_buffer->buffer + text.end_position : 
+      current_buffer->buffer + current_buffer->current_size);
+
   }
+
 
   for (Threadq::iterator i = runq->begin(); i != runq->end(); ++i)
     Decref(i->second);
@@ -633,11 +632,7 @@ bool NFA::Search(const StringPiece& text, const StringPiece& const_context,
   if (matched_) {
     for (int i = 0; i < nsubmatch; i++)
       submatch[i] =
-          StringPiece(match_[2 * i],
-                      static_cast<size_t>(match_[2 * i + 1] - match_[2 * i]));
-    if (ExtraDebug)
-      fprintf(stderr, "match (%td,%td)\n",
-              match_[0] - btext_, match_[1] - btext_);
+          PGRegexContext(match_[2 * i], match_[2 * i + 1]);
     return true;
   }
   return false;
@@ -705,14 +700,14 @@ int Prog::ComputeFirstByte() {
 }
 
 bool
-Prog::SearchNFA(const StringPiece& text, const StringPiece& context,
+Prog::SearchNFA(const PGRegexContext& text, const PGRegexContext& context,
                 Anchor anchor, MatchKind kind,
-                StringPiece* match, int nmatch) {
+                PGRegexContext* match, int nmatch) {
   if (ExtraDebug)
     Dump();
 
   NFA nfa(this);
-  StringPiece sp;
+  PGRegexContext sp;
   if (kind == kFullMatch) {
     anchor = kAnchored;
     if (nmatch == 0) {
@@ -722,8 +717,8 @@ Prog::SearchNFA(const StringPiece& text, const StringPiece& context,
   }
   if (!nfa.Search(text, context, anchor == kAnchored, kind != kFirstMatch, match, nmatch))
     return false;
-  if (kind == kFullMatch && match[0].end() != text.end())
-    return false;
+  /*if (kind == kFullMatch && match[0].end() != text.end())
+    return false;*/
   return true;
 }
 

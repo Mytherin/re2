@@ -188,7 +188,7 @@ void OnePass_Checks() {
                 "kMaxCap disagrees with kMaxOnePassCapture");
 }
 
-static bool Satisfy(uint32_t cond, const StringPiece& context, const char* p) {
+static bool Satisfy(uint32_t cond, const PGRegexContext& context, const char* p) {
   uint32_t satisfied = Prog::EmptyFlags(context, p);
   if (cond & kEmptyAllFlags & ~satisfied)
     return false;
@@ -197,11 +197,11 @@ static bool Satisfy(uint32_t cond, const StringPiece& context, const char* p) {
 
 // Apply the capture bits in cond, saving p to the appropriate
 // locations in cap[].
-static void ApplyCaptures(uint32_t cond, const char* p,
-                          const char** cap, int ncap) {
+static void ApplyCaptures(uint32_t cond, PGTextBuffer* current_buffer, const char* p,
+                          PGTextPosition* cap, int ncap) {
   for (int i = 2; i < ncap; i++)
     if (cond & (1 << kCapShift << i))
-      cap[i] = p;
+      cap[i] = PGTextPosition(current_buffer, p);
 }
 
 // Computes the OneState* for the given nodeindex.
@@ -210,10 +210,10 @@ static inline OneState* IndexToNode(uint8_t* nodes, int statesize,
   return reinterpret_cast<OneState*>(nodes + statesize*nodeindex);
 }
 
-bool Prog::SearchOnePass(const StringPiece& text,
-                         const StringPiece& const_context,
+bool Prog::SearchOnePass(const PGRegexContext& text,
+                         const PGRegexContext& const_context,
                          Anchor anchor, MatchKind kind,
-                         StringPiece* match, int nmatch) {
+                         PGRegexContext* match, int nmatch) {
   if (anchor != kAnchored && kind != kFullMatch) {
     LOG(DFATAL) << "Cannot use SearchOnePass for unanchored matches.";
     return false;
@@ -225,15 +225,15 @@ bool Prog::SearchOnePass(const StringPiece& text,
   if (ncap < 2)
     ncap = 2;
 
-  const char* cap[kMaxCap];
+  PGTextPosition cap[kMaxCap];
   for (int i = 0; i < ncap; i++)
-    cap[i] = NULL;
+    cap[i].buffer = NULL;
 
-  const char* matchcap[kMaxCap];
+  PGTextPosition matchcap[kMaxCap];
   for (int i = 0; i < ncap; i++)
-    matchcap[i] = NULL;
+    matchcap[i].buffer = NULL;
 
-  StringPiece context = const_context;
+  PGRegexContext context = const_context;
   if (context.begin() == NULL)
     context = text;
   if (anchor_start() && context.begin() != text.begin())
@@ -248,76 +248,92 @@ bool Prog::SearchOnePass(const StringPiece& text,
   // start() is always mapped to the zeroth OneState.
   OneState* state = IndexToNode(nodes, statesize, 0);
   uint8_t* bytemap = bytemap_;
-  const char* bp = text.begin();
-  const char* ep = text.end();
+
+  PGTextBuffer* current_buffer = text.start_buffer;
+  const char* bp = text.start_buffer->buffer + text.start_position;
+  const char* ep = text.end_start();
   const char* p;
   bool matched = false;
-  matchcap[0] = bp;
-  cap[0] = bp;
+  matchcap[0] = PGTextPosition(current_buffer, bp);
+  cap[0] = PGTextPosition(current_buffer, bp);
   uint32_t nextmatchcond = state->matchcond;
-  for (p = bp; p < ep; p++) {
-    int c = bytemap[*p & 0xFF];
-    uint32_t matchcond = nextmatchcond;
-    uint32_t cond = state->action[c];
+  while(1) {
+    for (p = bp; p < ep; p++) {
+      int c = bytemap[*p & 0xFF];
+      uint32_t matchcond = nextmatchcond;
+      uint32_t cond = state->action[c];
 
-    // Determine whether we can reach act->next.
-    // If so, advance state and nextmatchcond.
-    if ((cond & kEmptyAllFlags) == 0 || Satisfy(cond, context, p)) {
-      uint32_t nextindex = cond >> kIndexShift;
-      state = IndexToNode(nodes, statesize, nextindex);
-      nextmatchcond = state->matchcond;
-    } else {
-      state = NULL;
-      nextmatchcond = kImpossible;
-    }
+      // Determine whether we can reach act->next.
+      // If so, advance state and nextmatchcond.
+      if ((cond & kEmptyAllFlags) == 0 || Satisfy(cond, context, p)) {
+        uint32_t nextindex = cond >> kIndexShift;
+        state = IndexToNode(nodes, statesize, nextindex);
+        nextmatchcond = state->matchcond;
+      } else {
+        state = NULL;
+        nextmatchcond = kImpossible;
+      }
 
-    // This code section is carefully tuned.
-    // The goto sequence is about 10% faster than the
-    // obvious rewrite as a large if statement in the
-    // ASCIIMatchRE2 and DotMatchRE2 benchmarks.
+      // This code section is carefully tuned.
+      // The goto sequence is about 10% faster than the
+      // obvious rewrite as a large if statement in the
+      // ASCIIMatchRE2 and DotMatchRE2 benchmarks.
 
-    // Saving the match capture registers is expensive.
-    // Is this intermediate match worth thinking about?
+      // Saving the match capture registers is expensive.
+      // Is this intermediate match worth thinking about?
 
-    // Not if we want a full match.
-    if (kind == kFullMatch)
-      goto skipmatch;
+      // Not if we want a full match.
+      if (kind == kFullMatch)
+        goto skipmatch;
 
-    // Not if it's impossible.
-    if (matchcond == kImpossible)
-      goto skipmatch;
+      // Not if it's impossible.
+      if (matchcond == kImpossible)
+        goto skipmatch;
 
-    // Not if the possible match is beaten by the certain
-    // match at the next byte.  When this test is useless
-    // (e.g., HTTPPartialMatchRE2) it slows the loop by
-    // about 10%, but when it avoids work (e.g., DotMatchRE2),
-    // it cuts the loop execution by about 45%.
-    if ((cond & kMatchWins) == 0 && (nextmatchcond & kEmptyAllFlags) == 0)
-      goto skipmatch;
+      // Not if the possible match is beaten by the certain
+      // match at the next byte.  When this test is useless
+      // (e.g., HTTPPartialMatchRE2) it slows the loop by
+      // about 10%, but when it avoids work (e.g., DotMatchRE2),
+      // it cuts the loop execution by about 45%.
+      if ((cond & kMatchWins) == 0 && (nextmatchcond & kEmptyAllFlags) == 0)
+        goto skipmatch;
 
-    // Finally, the match conditions must be satisfied.
-    if ((matchcond & kEmptyAllFlags) == 0 || Satisfy(matchcond, context, p)) {
-      for (int i = 2; i < 2*nmatch; i++)
-        matchcap[i] = cap[i];
-      if (nmatch > 1 && (matchcond & kCapMask))
-        ApplyCaptures(matchcond, p, matchcap, ncap);
-      matchcap[1] = p;
-      matched = true;
+      // Finally, the match conditions must be satisfied.
+      if ((matchcond & kEmptyAllFlags) == 0 || Satisfy(matchcond, context, p)) {
+        for (int i = 2; i < 2*nmatch; i++)
+          matchcap[i] = cap[i];
+        if (nmatch > 1 && (matchcond & kCapMask))
+          ApplyCaptures(matchcond, current_buffer, p, matchcap, ncap);
+        matchcap[1] = PGTextPosition(current_buffer, p);
+        matched = true;
 
-      // If we're in longest match mode, we have to keep
-      // going and see if we find a longer match.
-      // In first match mode, we can stop if the match
-      // takes priority over the next state for this input byte.
-      // That bit is per-input byte and thus in cond, not matchcond.
-      if (kind == kFirstMatch && (cond & kMatchWins))
+        // If we're in longest match mode, we have to keep
+        // going and see if we find a longer match.
+        // In first match mode, we can stop if the match
+        // takes priority over the next state for this input byte.
+        // That bit is per-input byte and thus in cond, not matchcond.
+        if (kind == kFirstMatch && (cond & kMatchWins))
+          goto done;
+      }
+
+    skipmatch:
+      if (state == NULL)
         goto done;
+      if ((cond & kCapMask) && nmatch > 1)
+        ApplyCaptures(cond, current_buffer, p, cap, ncap);
     }
 
-  skipmatch:
-    if (state == NULL)
-      goto done;
-    if ((cond & kCapMask) && nmatch > 1)
-      ApplyCaptures(cond, p, cap, ncap);
+    if (p != ep) break;
+    if (current_buffer == text.end_buffer) break;
+    PGTextBuffer* next_buffer;
+    next_buffer = current_buffer->next;
+    if (!next_buffer) break;
+    current_buffer = next_buffer;
+    bp = current_buffer->buffer;
+    p = bp;
+    ep = (current_buffer == text.end_buffer ? 
+      current_buffer->buffer + text.end_position : 
+      current_buffer->buffer + current_buffer->current_size);
   }
 
   // Look for match at end of input.
@@ -326,10 +342,10 @@ bool Prog::SearchOnePass(const StringPiece& text,
     if (matchcond != kImpossible &&
         ((matchcond & kEmptyAllFlags) == 0 || Satisfy(matchcond, context, p))) {
       if (nmatch > 1 && (matchcond & kCapMask))
-        ApplyCaptures(matchcond, p, cap, ncap);
+        ApplyCaptures(matchcond, current_buffer, p, cap, ncap);
       for (int i = 2; i < ncap; i++)
         matchcap[i] = cap[i];
-      matchcap[1] = p;
+      matchcap[1] = PGTextPosition(current_buffer, p);
       matched = true;
     }
   }
@@ -338,9 +354,7 @@ done:
   if (!matched)
     return false;
   for (int i = 0; i < nmatch; i++)
-    match[i] =
-        StringPiece(matchcap[2 * i],
-                    static_cast<size_t>(matchcap[2 * i + 1] - matchcap[2 * i]));
+    match[i] = PGRegexContext(matchcap[2 * i], matchcap[2 * i + 1]);
   return true;
 }
 

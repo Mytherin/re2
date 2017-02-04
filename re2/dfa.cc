@@ -1315,12 +1315,12 @@ inline bool DFA::InlinedSearchLoop(SearchParams* params,
     current_buffer = piece->end_buffer;
     bp = (const uint8_t*) current_buffer->buffer + piece->end_position;
     p = bp;
-    ep = (const uint8_t*) current_buffer->buffer;
+    ep = (const uint8_t*) current_buffer->buffer + (piece->start_buffer == piece->end_buffer ? piece->start_position : 0);
   } else {
     current_buffer = piece->start_buffer;
     bp = (const uint8_t*) current_buffer->buffer + piece->start_position;
     p = bp;
-    ep = (const uint8_t*) current_buffer->buffer + current_buffer->current_size;
+    ep = (const uint8_t*) current_buffer->buffer +  (piece->start_buffer == piece->end_buffer ? piece->end_position : current_buffer->current_size);
   }
 
   const uint8_t* bytemap = prog_->bytemap();
@@ -1983,6 +1983,7 @@ void Prog::TEST_dfa_should_bail_when_slow(bool b) {
 bool DFA::PossibleMatchRange(string* min, string* max, int maxlen) {
   if (!ok())
     return false;
+  return false;
 
   // NOTE: if future users of PossibleMatchRange want more precision when
   // presented with infinitely repeated elements, consider making this a

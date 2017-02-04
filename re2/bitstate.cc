@@ -40,9 +40,9 @@ class BitState {
 
   // The usual Search prototype.
   // Can only call Search once per BitState.
-  bool Search(const StringPiece& text, const StringPiece& context,
+  bool Search(const PGRegexContext& text, const PGRegexContext& context,
               bool anchored, bool longest,
-              StringPiece* submatch, int nsubmatch);
+              PGRegexContext* submatch, int nsubmatch);
 
  private:
   inline bool ShouldVisit(int id, const char* p);
@@ -52,12 +52,12 @@ class BitState {
 
   // Search parameters
   Prog* prog_;              // program being run
-  StringPiece text_;        // text being searched
-  StringPiece context_;     // greater context of text being searched
+  PGRegexContext text_;        // text being searched
+  PGRegexContext context_;     // greater context of text being searched
   bool anchored_;           // whether search is anchored at text.begin()
   bool longest_;            // whether search wants leftmost-longest match
   bool endmatch_;           // whether match must end at text.end()
-  StringPiece *submatch_;   // submatches to fill in
+  PGRegexContext *submatch_;   // submatches to fill in
   int nsubmatch_;           //   # of submatches to fill in
 
   // Search state

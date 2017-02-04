@@ -340,6 +340,21 @@ class RE2 {
   static bool FindAndConsumeN(PGRegexContext* input, const RE2& re,
                               const Arg* const args[], int argc);
 
+
+  static bool FullMatchNSP(const StringPiece& text, const RE2& re,
+                         const Arg* const args[], int argc) {
+    return FullMatchN(PGRegexContext(text), re, args, argc);
+  }
+  static bool PartialMatchNSP(const StringPiece& text, const RE2& re,
+                        const Arg* const args[], int n) {
+    return PartialMatchN(PGRegexContext(text), re, args, n);
+  }
+  static bool ConsumeNSP(StringPiece* input, const RE2& re,
+                       const Arg* const args[], int argc);
+
+  static bool FindAndConsumeNSP(StringPiece* input, const RE2& re,
+                              const Arg* const args[], int argc);
+
 #ifndef SWIG
  private:
   template <typename F, typename SP>
@@ -359,6 +374,23 @@ class RE2 {
   // of arguments of varying types, we use two layers of variadic templates.
   // The first layer constructs the temporary Arg objects. The second layer
   // (above) constructs the array of pointers to the temporary Arg objects.
+
+  template <typename... A>
+  static bool FullMatch(const StringPiece& text, const RE2& re, A&&... a) {
+    return FullMatch(PGRegexContext(text), re, Arg(std::forward<A>(a))...);
+  }
+  template <typename... A>
+  static bool PartialMatch(const StringPiece& text, const RE2& re, A&&... a) {
+    return PartialMatch(PGRegexContext(text), re, Arg(std::forward<A>(a))...);
+  }
+  template <typename... A>
+  static bool Consume(StringPiece* text, const RE2& re, A&&... a) {
+    return Apply(ConsumeNSP, text, re, Arg(std::forward<A>(a))...);
+  }
+  template <typename... A>
+  static bool FindAndConsume(StringPiece* text, const RE2& re, A&&... a) {
+    return Apply(FindAndConsumeNSP, text, re, Arg(std::forward<A>(a))...);
+  }
 
   template <typename... A>
   static bool FullMatch(const PGRegexContext& text, const RE2& re, A&&... a) {
@@ -501,6 +533,13 @@ class RE2 {
              Anchor anchor,
              PGRegexContext *match,
              int nmatch) const;
+
+  bool Match(const StringPiece& text,
+          size_t startpos, 
+          size_t endpos,
+          Anchor anchor,
+          StringPiece *match,
+          int nmatch) const;
 
   // Check that the given rewrite string is suitable for use with this
   // regular expression.  It checks that:

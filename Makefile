@@ -71,6 +71,7 @@ endif
 all: obj/libre2.a obj/so/libre2.$(SOEXT)
 
 INSTALL_HFILES=\
+	re2/filtered_re2.h\
 	re2/re2.h\
 	re2/set.h\
 	re2/stringpiece.h\
@@ -89,11 +90,13 @@ HFILES=\
 	util/utf.h\
 	util/util.h\
 	re2/bitmap256.h\
+	re2/filtered_re2.h\
 	re2/prefilter.h\
 	re2/prefilter_tree.h\
 	re2/prog.h\
 	re2/re2.h\
 	re2/regexp.h\
+	re2/set.h\
 	re2/stringpiece.h\
 	re2/testing/exhaustive_tester.h\
 	re2/testing/regexp_generator.h\
@@ -108,6 +111,7 @@ OFILES=\
 	obj/util/strutil.o\
 	obj/re2/compile.o\
 	obj/re2/dfa.o\
+	obj/re2/filtered_re2.o\
 	obj/re2/mimics_pcre.o\
 	obj/re2/nfa.o\
 	obj/re2/onepass.o\
@@ -118,6 +122,7 @@ OFILES=\
 	obj/re2/prog.o\
 	obj/re2/re2.o\
 	obj/re2/regexp.o\
+	obj/re2/set.o\
 	obj/re2/simplify.o\
 	obj/re2/stringpiece.o\
 	obj/re2/tostring.o\
@@ -137,6 +142,7 @@ TESTOFILES=\
 TESTS=\
 	obj/test/charclass_test\
 	obj/test/compile_test\
+	obj/test/filtered_re2_test\
 	obj/test/mimics_pcre_test\
 	obj/test/parse_test\
 	obj/test/possible_match_test\
@@ -145,6 +151,7 @@ TESTS=\
 	obj/test/regexp_test\
 	obj/test/required_prefix_test\
 	obj/test/search_test\
+	obj/test/set_test\
 	obj/test/simplify_test\
 	obj/test/string_generator_test\
 

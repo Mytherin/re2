@@ -298,8 +298,31 @@ void TestInstance::RunSearch(Engine type,
   if (nsubmatch > kMaxSubmatch)
     nsubmatch = kMaxSubmatch;
 
-  StringPiece text = orig_text;
-  StringPiece context = orig_context;
+  StringPiece str_text = orig_text;
+  StringPiece str_context = orig_context;
+
+
+  PGTextBuffer buffer;
+  buffer.buffer = (char*) str_text.data();
+  buffer.current_size = str_text.size();
+
+  PGRegexContext text;
+  text.start_buffer = &buffer;
+  text.start_position = 0;
+  text.end_buffer = &buffer;
+  text.end_position = buffer.current_size;
+
+  PGTextBuffer buffer2;
+  buffer2.buffer = (char*) orig_context.data();
+  buffer2.current_size = orig_context.size();
+
+  PGRegexContext context;
+  context.start_buffer = &buffer2;
+  context.start_position = 0;
+  context.end_buffer = &buffer2;
+  context.end_position = buffer2.current_size;
+
+  PGRegexContext regex_context_matches[kMaxSubmatch];
 
   switch (type) {
     default:
@@ -311,11 +334,11 @@ void TestInstance::RunSearch(Engine type,
         break;
       }
       result->matched =
-        prog_->UnsafeSearchBacktrack(text, context, anchor, kind_,
+        prog_->UnsafeSearchBacktrack(str_text, str_context, anchor, kind_,
                                      result->submatch, nsubmatch);
       result->have_submatch = true;
       break;
-
+    case kEngineBitState:
     case kEngineNFA:
       if (prog_ == NULL) {
         result->skipped = true;
@@ -323,7 +346,10 @@ void TestInstance::RunSearch(Engine type,
       }
       result->matched =
         prog_->SearchNFA(text, context, anchor, kind_,
-                        result->submatch, nsubmatch);
+                        regex_context_matches, nsubmatch);
+      for(int i = 0; i < kMaxSubmatch; i++) {
+        result->submatch[i] = StringPiece(regex_context_matches[i].GetString());
+      }
       result->have_submatch = true;
       break;
 
@@ -342,19 +368,21 @@ void TestInstance::RunSearch(Engine type,
         break;
       }
       result->matched =
-        prog_->SearchDFA(text, context, anchor, kind_, result->submatch,
+        prog_->SearchDFA(text, context, anchor, kind_, regex_context_matches,
                          &result->skipped, NULL);
       // If anchored, no need for second run,
       // but do it anyway to find more bugs.
       if (result->matched) {
-        if (!rprog_->SearchDFA(result->submatch[0], context,
+        if (!rprog_->SearchDFA(regex_context_matches[0], context,
                                Prog::kAnchored, Prog::kLongestMatch,
-                               result->submatch,
+                               regex_context_matches,
                                &result->skipped, NULL)) {
           LOG(ERROR) << "Reverse DFA inconsistency: "
-                     << CEscape(regexp_str_)
-                     << " on " << CEscape(text);
+                     << CEscape(regexp_str_);
           result->matched = false;
+        }
+        for(int i = 0; i < kMaxSubmatch; i++) {
+          result->submatch[i] = StringPiece(regex_context_matches[i].GetString());
         }
       }
       result->have_submatch0 = true;
@@ -369,20 +397,23 @@ void TestInstance::RunSearch(Engine type,
         break;
       }
       result->matched = prog_->SearchOnePass(text, context, anchor, kind_,
-                                      result->submatch, nsubmatch);
+                                      regex_context_matches, nsubmatch);
+      for(int i = 0; i < kMaxSubmatch; i++) {
+        result->submatch[i] = StringPiece(regex_context_matches[i].GetString());
+      }
       result->have_submatch = true;
       break;
-
+/*
     case kEngineBitState:
       if (prog_ == NULL) {
         result->skipped = true;
         break;
       }
-      result->matched = prog_->SearchBitState(text, context, anchor, kind_,
+      result->matched = prog_->SearchBitState(str_text, str_context, anchor, kind_,
                                               result->submatch, nsubmatch);
       result->have_submatch = true;
       break;
-
+*/
     case kEngineRE2:
     case kEngineRE2a:
     case kEngineRE2b: {
@@ -401,18 +432,19 @@ void TestInstance::RunSearch(Engine type,
 
       result->matched = re2_->Match(
           context,
-          static_cast<size_t>(text.begin() - context.begin()),
-          static_cast<size_t>(text.end() - context.begin()),
           re_anchor,
-          result->submatch,
+          regex_context_matches,
           nsubmatch);
+      for(int i = 0; i < kMaxSubmatch; i++) {
+        result->submatch[i] = StringPiece(regex_context_matches[i].GetString());
+      }
       result->have_submatch = nsubmatch > 0;
       break;
     }
 
     case kEnginePCRE: {
-      if (!re_ || text.begin() != context.begin() ||
-          text.end() != context.end()) {
+      if (!re_ || str_text.begin() != str_context.begin() ||
+          str_text.end() != str_context.end()) {
         result->skipped = true;
         break;
       }
@@ -422,9 +454,9 @@ void TestInstance::RunSearch(Engine type,
       // unable to handle all cases of this, unfortunately, so just
       // catch them here. :(
       if (regexp_str_.find("\\v") != StringPiece::npos &&
-          (text.find('\n') != StringPiece::npos ||
-           text.find('\f') != StringPiece::npos ||
-           text.find('\r') != StringPiece::npos)) {
+          (str_text.find('\n') != StringPiece::npos ||
+           str_text.find('\f') != StringPiece::npos ||
+           str_text.find('\r') != StringPiece::npos)) {
         result->skipped = true;
         break;
       }
@@ -433,7 +465,7 @@ void TestInstance::RunSearch(Engine type,
       // following a change made in Perl 5.18. RE2 does not.
       if ((regexp_str_.find("\\s") != StringPiece::npos ||
            regexp_str_.find("\\S") != StringPiece::npos) &&
-          text.find('\v') != StringPiece::npos) {
+          str_text.find('\v') != StringPiece::npos) {
         result->skipped = true;
         break;
       }
@@ -454,7 +486,7 @@ void TestInstance::RunSearch(Engine type,
         pcre_anchor = PCRE::ANCHOR_BOTH;
       re_->ClearHitLimit();
       result->matched =
-        re_->DoMatch(text,
+        re_->DoMatch(str_text,
                      pcre_anchor,
                      &consumed,
                      argptr, nsubmatch);

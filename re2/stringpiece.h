@@ -34,57 +34,12 @@ struct PGTextBuffer {
 public:
   char* buffer = nullptr;
   ulng current_size = 0;
+  lng start_line = 0;
 
   PGTextBuffer* prev = nullptr;
   PGTextBuffer* next = nullptr;
-};
 
-struct PGRegexContext {
-  PGTextBuffer* start_buffer;
-  lng start_position;
-  PGTextBuffer* end_buffer;
-  lng end_position;
-
-  PGRegexContext() : start_buffer(nullptr), start_position(0), end_buffer(nullptr), end_position(0) { }
-
-  std::string GetString() const {
-    if (!start_buffer || !end_buffer) {
-      return std::string();
-    }
-    size_t size = 0;
-    PGTextBuffer* buffer = start_buffer;
-    lng position = start_position;
-    while(buffer != end_buffer) {
-      size += buffer->current_size - position;
-      position = 0;
-      buffer = buffer->next;
-    }
-    size += end_position - position;
-    char* data = (char*) malloc(size * sizeof(char) + 1);
-    char* current_data = data;
-    buffer = start_buffer;
-    position = start_position;
-    while(buffer != end_buffer) {
-      size_t size = buffer->current_size - position;
-      memcpy(current_data, buffer->buffer + position, size);
-      current_data += size;
-      position = 0;
-      buffer = buffer->next;
-    }
-    memcpy(current_data, buffer->buffer + position, end_position - position);
-    std::string result = std::string(data, size);
-    free(data);
-    return result;
-  }
-
-  char* begin() const { return start_buffer->buffer + start_position; }
-  char* end_start() const { return 
-    start_buffer == end_buffer ? 
-    start_buffer->buffer + end_position : 
-    start_buffer->buffer + start_buffer->current_size; }
-  char* end() const { return end_buffer->buffer + end_position; }
-
-  void remove_prefix(size_t length);
+  PGTextBuffer() : buffer(nullptr), current_size(0), start_line(0) { }
 };
 
 struct PGTextPosition {
@@ -93,9 +48,21 @@ struct PGTextPosition {
 
   char* data() { return buffer->buffer + position; }
 
+  PGTextPosition(PGTextBuffer* buffer, const char* ptr) : buffer(buffer), position(ptr - buffer->buffer) { }
   PGTextPosition() : buffer(nullptr), position(0) { }
   PGTextPosition(PGTextBuffer* buffer) : buffer(buffer), position(0) { }
 };
+
+inline bool operator< (const PGTextPosition& lhs, const PGTextPosition& rhs) { 
+  return (lhs.buffer->start_line < rhs.buffer->start_line) || 
+    (lhs.buffer->start_line == rhs.buffer->start_line && lhs.position < rhs.position);
+}
+inline bool operator> (const PGTextPosition& lhs, const PGTextPosition& rhs){ return rhs < lhs; }
+inline bool operator<=(const PGTextPosition& lhs, const PGTextPosition& rhs){ return !(lhs > rhs); }
+inline bool operator>=(const PGTextPosition& lhs, const PGTextPosition& rhs){ return !(lhs < rhs); }
+inline bool operator== (const PGTextPosition& lhs, const PGTextPosition& rhs){ 
+  return (lhs.buffer == rhs.buffer && lhs.position == rhs.position);
+}
 
 namespace re2 {
 
@@ -257,5 +224,71 @@ inline bool operator>=(const StringPiece& x, const StringPiece& y) {
 std::ostream& operator<<(std::ostream& o, const StringPiece& p);
 
 }  // namespace re2
+
+
+struct PGRegexContext {
+  PGTextBuffer* start_buffer;
+  lng start_position;
+  PGTextBuffer* end_buffer;
+  lng end_position;
+
+  PGRegexContext(re2::StringPiece text) {
+    PGTextBuffer* buffer = new PGTextBuffer();
+    buffer->prev = nullptr;
+    buffer->next = nullptr;
+    buffer->buffer = (char*) text.data();
+    buffer->current_size = text.size();
+
+    this->start_buffer = buffer;
+    this->start_position = 0;
+    this->end_buffer = buffer;
+    this->end_position = buffer->current_size;
+  }
+
+  PGRegexContext(PGTextPosition start, PGTextPosition end) : 
+    start_buffer(start.buffer), start_position(start.position),
+    end_buffer(end.buffer), end_position(end.position) { }
+
+  PGRegexContext() : start_buffer(nullptr), start_position(0), end_buffer(nullptr), end_position(0) { }
+
+  std::string GetString() const {
+    if (!start_buffer || !end_buffer) {
+      return std::string();
+    }
+    size_t size = 0;
+    PGTextBuffer* buffer = start_buffer;
+    lng position = start_position;
+    while(buffer != end_buffer) {
+      size += buffer->current_size - position;
+      position = 0;
+      buffer = buffer->next;
+    }
+    size += end_position - position;
+    char* data = (char*) malloc(size * sizeof(char) + 1);
+    char* current_data = data;
+    buffer = start_buffer;
+    position = start_position;
+    while(buffer != end_buffer) {
+      size_t size = buffer->current_size - position;
+      memcpy(current_data, buffer->buffer + position, size);
+      current_data += size;
+      position = 0;
+      buffer = buffer->next;
+    }
+    memcpy(current_data, buffer->buffer + position, end_position - position);
+    std::string result = std::string(data, size);
+    free(data);
+    return result;
+  }
+
+  char* begin() const { return start_buffer->buffer + start_position; }
+  char* end_start() const { return 
+    start_buffer == end_buffer ? 
+    start_buffer->buffer + end_position : 
+    start_buffer->buffer + start_buffer->current_size; }
+  char* end() const { return end_buffer->buffer + end_position; }
+
+  void remove_prefix(size_t length);
+};
 
 #endif  // RE2_STRINGPIECE_H_
