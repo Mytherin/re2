@@ -288,7 +288,43 @@ static bool IsMatch(Prog* prog, Prog::Inst* ip) {
   }
 }
 
-uint32_t Prog::EmptyFlags(const PGRegexContext& text, const char* p) {
+uint32_t Prog::EmptyFlags(const PGRegexContext& context, PGTextPosition p) {
+  int flags = 0;
+
+  PGTextPosition prev = p - 1;
+
+  // ^ and \A
+  if (p == context.startpos())
+    flags |= kEmptyBeginText | kEmptyBeginLine;
+  else if (*prev == '\n')
+    flags |= kEmptyBeginLine;
+
+  // $ and \z
+  if (p == context.endpos())
+    flags |= kEmptyEndText | kEmptyEndLine;
+  else if (p < context.endpos() && *p == '\n')
+    flags |= kEmptyEndLine;
+
+  // \b and \B
+  if (p == context.startpos() && p == context.endpos()) {
+    // no word boundary here
+  } else if (p == context.startpos()) {
+    if (IsWordChar(*p))
+      flags |= kEmptyWordBoundary;
+  } else if (p == context.endpos()) {
+    if (IsWordChar(*prev))
+      flags |= kEmptyWordBoundary;
+  } else {
+    if (IsWordChar(*prev) != IsWordChar(*p))
+      flags |= kEmptyWordBoundary;
+  }
+  if (!(flags & kEmptyWordBoundary))
+    flags |= kEmptyNonWordBoundary;
+
+  return flags;
+}
+
+uint32_t Prog::EmptyFlagsCharacter(const PGRegexContext& text, const char* p) {
   int flags = 0;
 
   // ^ and \A

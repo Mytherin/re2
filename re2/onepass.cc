@@ -188,7 +188,7 @@ void OnePass_Checks() {
                 "kMaxCap disagrees with kMaxOnePassCapture");
 }
 
-static bool Satisfy(uint32_t cond, const PGRegexContext& context, const char* p) {
+static bool Satisfy(uint32_t cond, const PGRegexContext& context, PGTextPosition p) {
   uint32_t satisfied = Prog::EmptyFlags(context, p);
   if (cond & kEmptyAllFlags & ~satisfied)
     return false;
@@ -221,7 +221,7 @@ bool Prog::SearchOnePass(const PGRegexContext& text,
 
   // Make sure we have at least cap[1],
   // because we use it to tell if we matched.
-  int ncap = 2*nmatch;
+  int ncap = 2 * nmatch;
   if (ncap < 2)
     ncap = 2;
 
@@ -265,7 +265,7 @@ bool Prog::SearchOnePass(const PGRegexContext& text,
 
       // Determine whether we can reach act->next.
       // If so, advance state and nextmatchcond.
-      if ((cond & kEmptyAllFlags) == 0 || Satisfy(cond, context, p)) {
+      if ((cond & kEmptyAllFlags) == 0 || Satisfy(cond, context, PGTextPosition(current_buffer, p))) {
         uint32_t nextindex = cond >> kIndexShift;
         state = IndexToNode(nodes, statesize, nextindex);
         nextmatchcond = state->matchcond;
@@ -299,7 +299,7 @@ bool Prog::SearchOnePass(const PGRegexContext& text,
         goto skipmatch;
 
       // Finally, the match conditions must be satisfied.
-      if ((matchcond & kEmptyAllFlags) == 0 || Satisfy(matchcond, context, p)) {
+      if ((matchcond & kEmptyAllFlags) == 0 || Satisfy(matchcond, context, PGTextPosition(current_buffer, p))) {
         for (int i = 2; i < 2*nmatch; i++)
           matchcap[i] = cap[i];
         if (nmatch > 1 && (matchcond & kCapMask))
@@ -340,7 +340,7 @@ bool Prog::SearchOnePass(const PGRegexContext& text,
   {
     uint32_t matchcond = state->matchcond;
     if (matchcond != kImpossible &&
-        ((matchcond & kEmptyAllFlags) == 0 || Satisfy(matchcond, context, p))) {
+        ((matchcond & kEmptyAllFlags) == 0 || Satisfy(matchcond, context, PGTextPosition(current_buffer, p)))) {
       if (nmatch > 1 && (matchcond & kCapMask))
         ApplyCaptures(matchcond, current_buffer, p, cap, ncap);
       for (int i = 2; i < ncap; i++)

@@ -25,6 +25,58 @@ void PGRegexContext::remove_prefix(size_t length) {
   start_position = 0;
 }
 
+
+// Avoid possible locale nonsense in standard strcasecmp.
+// The string a is known to be all lowercase.
+static int _ascii_strcasecmp(const char* a, const char* b, size_t len) {
+  const char *ae = a + len;
+
+  for (; a < ae; a++, b++) {
+    uint8_t x = *a;
+    uint8_t y = *b;
+    if ('A' <= y && y <= 'Z')
+      y += 'a' - 'A';
+    if (x != y)
+      return x - y;
+  }
+  return 0;
+}
+
+#define BUFFER_COMPARISON(function) \
+  PGTextBuffer* buffer = start_buffer; \
+  lng start = start_position; \
+  while(buffer) { \
+    lng buffer_left = (buffer == end_buffer ?  end_position : buffer->current_size) - start; \
+    if (buffer_left < (lng) length) { \
+      /* length is bigger than buffer length; consume the entire buffer */ \
+      /* then check the next buffer */ \
+      int retval = function(data, buffer->buffer + start, buffer_left); \
+      if (retval != 0) { \
+        /* early out if the comparison fails */ \
+        return retval; \
+      } \
+      length -= buffer_left; \
+    } else { \
+      /* length fits within the buffer, finish the comparison */ \
+      return function(data, buffer->buffer + start, length); \
+    } \
+    if (buffer == end_buffer) { \
+      break; \
+    } \
+    buffer = buffer->next; \
+    start = 0; \
+  } \
+  /* we ran out of text */ \
+  return -1;
+
+int PGRegexContext::ascii_strcasecmp(const char* data, size_t length) const {
+  BUFFER_COMPARISON(_ascii_strcasecmp);
+}
+
+int PGRegexContext::_memcmp(const char* data, size_t length) const {
+  BUFFER_COMPARISON(memcmp);
+}
+
 namespace re2 {
 
 const StringPiece::size_type StringPiece::npos;  // initialized in stringpiece.h

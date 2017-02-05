@@ -530,6 +530,7 @@ class RE2 {
   // whether submatch i matched the empty string or did not match:
   // either way, match[i].data() == NULL.
   bool Match(const PGRegexContext& text,
+             PGRegexContext subtext,
              Anchor anchor,
              PGRegexContext *match,
              int nmatch) const;

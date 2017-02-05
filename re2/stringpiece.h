@@ -324,6 +324,10 @@ struct PGRegexContext {
     return result;
   }
 
+  // "data" has to be lowercase
+  int ascii_strcasecmp(const char* data, size_t length) const;
+  int _memcmp(const char* data, size_t length) const;
+
   PGTextPosition startpos() const { return PGTextPosition(start_buffer, start_position); }
   PGTextPosition endpos() const { return PGTextPosition(end_buffer, end_position); }
 

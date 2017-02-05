@@ -421,7 +421,6 @@ bool NFA::Search(const PGRegexContext& text, const PGRegexContext& const_context
     context = text;
 
   // Sanity check: make sure that text lies within context.
-  // FIXME: proper containment
   if (text.startpos() < context.startpos() || text.endpos() > context.endpos()) {
     LOG(DFATAL) << "context does not contain text";
     return false;
@@ -465,14 +464,14 @@ bool NFA::Search(const PGRegexContext& text, const PGRegexContext& const_context
   memset(&match_[0], 0, ncapture_*sizeof match_[0]);
   int wasword = 0;
 
-  if (text.startpos() > context.endpos())
+  if (text.startpos() > context.startpos())
     wasword = Prog::IsWordChar(*(text.startpos() - 1) & 0xFF);
 
 
   PGTextBuffer* current_buffer = text.start_buffer;
   const char* p = text.begin();
-  const char* ep = text.start_buffer->buffer + text.start_buffer->current_size;
-  const char* real_end = text.end_buffer->buffer + text.end_position;
+  const char* ep = text.end_start();
+  const char* endptr = text.end_buffer->buffer + text.end_position;
 
 
   PGTextPosition prev = text.startpos() - 1;
@@ -520,7 +519,7 @@ bool NFA::Search(const PGRegexContext& text, const PGRegexContext& const_context
     // c and flag through to AddToThreadq() along with p-1+1, which is p.
     //
     // This is a no-op the first time around the loop because runq is empty.
-    int id = Step(runq, nextq, p != real_end ? p[0] & 0xFF : -1, flag, prev);
+    int id = Step(runq, nextq, p < endptr ? p[0] & 0xFF : -1, flag, prev);
     DCHECK_EQ(runq->size(), 0);
     using std::swap;
     swap(nextq, runq);
@@ -576,14 +575,14 @@ bool NFA::Search(const PGRegexContext& text, const PGRegexContext& const_context
         } else {
           isword = Prog::IsWordChar(p[0] & 0xFF);
         }
-        flag = Prog::EmptyFlags(context, p);
+        flag = Prog::EmptyFlags(context, PGTextPosition(current_buffer, p));
       }
 
       Thread* t = AllocThread();
       CopyCapture(t->capture, match_);
       auto current_position = PGTextPosition(current_buffer, p);
       t->capture[0] = current_position;
-      AddToThreadq(runq, start_, p != real_end ? p[0] & 0xFF : -1, flag, current_position, t);
+      AddToThreadq(runq, start_, p < endptr ? p[0] & 0xFF : -1, flag, current_position, t);
       Decref(t);
     }
 

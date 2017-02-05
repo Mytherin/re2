@@ -572,43 +572,9 @@ bool RE2::PossibleMatchRange(string* min, string* max, int maxlen) const {
   return true;
 }
 
-/*
-// Avoid possible locale nonsense in standard strcasecmp.
-// The string a is known to be all lowercase.
-static int ascii_strcasecmp(const char* a, const PGRegexContext& text, size_t len) {
-  const char *ae = a + len;
-
-  PGTextBuffer* buffer = text.start_buffer;
-  char* buf = buffer->buffer;
-  size_t position = text.start_position;
-  size_t maxpos = buffer->current_size - 1;
-
-  while(1) {
-    for(; position < maxpos && a < ae; a++, position++) {
-      uint8_t x = *a;
-      uint8_t y = buf[position];
-      if ('A' <= y && y <= 'Z')
-        y += 'a' - 'A';
-      if (x != y)
-        return x - y;
-    }
-    if (position == maxpos) {
-      if (buffer->next) {
-        buffer = buffer->next;
-        position = 0;
-        maxpos = buffer->current_pos;
-      } else {
-        return -1;
-      }
-    }
-  }
-  return 0;
-}
-*/
-
 /***** Actual matching and rewriting code *****/
 
-bool RE2::Match(const StringPiece& text,
+bool RE2::Match(const StringPiece& str_context,
         size_t startpos, 
         size_t endpos,
         Anchor anchor,
@@ -616,9 +582,14 @@ bool RE2::Match(const StringPiece& text,
         int nmatch) const {
   // FIXME: randomly split stringpiece into separate buffers
   // and check if results are still correct
-  PGRegexContext context = PGRegexContext(text);
-  context.start_position = startpos;
-  context.end_position = endpos;
+  PGRegexContext context = PGRegexContext(str_context);
+
+
+  PGRegexContext text;
+  text.start_buffer = context.start_buffer;
+  text.end_buffer = context.end_buffer;
+  text.start_position = startpos;
+  text.end_position = endpos;
 
 
   PGRegexContext* submatches = (PGRegexContext*) malloc(sizeof(PGRegexContext) * nmatch);
@@ -627,7 +598,7 @@ bool RE2::Match(const StringPiece& text,
   }
 
 
-  bool retval = Match(context, anchor, submatches, nmatch);
+  bool retval = Match(context, text, anchor, submatches, nmatch);
   if (retval) {
     for(int i = 0; i < nmatch; i++) {
       match[i] = submatches[i].GetString();
@@ -636,7 +607,8 @@ bool RE2::Match(const StringPiece& text,
   return retval;
 }
 
-bool RE2::Match(const PGRegexContext& text,
+bool RE2::Match(const PGRegexContext& context,
+                PGRegexContext subtext,
                 Anchor re_anchor,
                 PGRegexContext* submatch,
                 int nsubmatch) const {
@@ -645,8 +617,6 @@ bool RE2::Match(const PGRegexContext& text,
       LOG(ERROR) << "Invalid RE2: " << *error_;
     return false;
   }
-
-  PGRegexContext subtext = text;
 
   // Use DFAs to find exact location of match, filter out non-matches.
 
@@ -662,7 +632,7 @@ bool RE2::Match(const PGRegexContext& text,
     ncap = nsubmatch;
 
   // If the regexp is anchored explicitly, must not be in middle of text.
-  if (prog_->anchor_start() && (text.start_position > 0 || text.start_buffer->prev != nullptr))
+  if (prog_->anchor_start() && (subtext.start_position > 0 || subtext.start_buffer->prev != nullptr))
     return false;
 
   // If the regexp is anchored explicitly, update re_anchor
@@ -676,20 +646,21 @@ bool RE2::Match(const PGRegexContext& text,
   // Check for the required prefix, if any.
   size_t prefixlen = 0;
   if (!prefix_.empty()) {
-    assert(0);
-    /*prefixlen = prefix_.size();
+    if (subtext.start_position > 0 || subtext.start_buffer->prev != nullptr) {
+      return false;
+    }
+    prefixlen = prefix_.size();
     if (prefix_foldcase_) {
-      if (ascii_strcasecmp(&prefix_[0], text, prefixlen) != 0)
+      if (subtext.ascii_strcasecmp(&prefix_[0], prefixlen) != 0)
         return false;
     } else {
-      // FIXME: strcmp not strcasecmp
-      if (ascii_strcasecmp(&prefix_[0], text, prefixlen) != 0)
+      if (subtext._memcmp(&prefix_[0], prefixlen) != 0)
         return false;
     }
     subtext.remove_prefix(prefixlen);
     // If there is a required prefix, the anchor must be at least ANCHOR_START.
     if (re_anchor != ANCHOR_BOTH)
-      re_anchor = ANCHOR_START;*/
+      re_anchor = ANCHOR_START;
   }
 
   Prog::Anchor anchor = Prog::kUnanchored;
@@ -714,7 +685,7 @@ bool RE2::Match(const PGRegexContext& text,
   switch (re_anchor) {
     default:
     case UNANCHORED: {
-      if (!prog_->SearchDFA(subtext, text, anchor, kind,
+      if (!prog_->SearchDFA(subtext, context, anchor, kind,
                             matchp, &dfa_failed, NULL)) {
         if (dfa_failed) {
           if (options_.log_errors())
@@ -735,7 +706,7 @@ bool RE2::Match(const PGRegexContext& text,
       Prog* prog = ReverseProg();
       if (prog == NULL)
         return false;
-      if (!prog->SearchDFA(match, text, Prog::kAnchored,
+      if (!prog->SearchDFA(match, context, Prog::kAnchored,
                            Prog::kLongestMatch, &match, &dfa_failed, NULL)) {
         if (dfa_failed) {
           if (options_.log_errors())
@@ -766,21 +737,17 @@ bool RE2::Match(const PGRegexContext& text,
       // On tiny texts, OnePass outruns even the DFA, and
       // it doesn't have the shared state and occasional mutex that
       // the DFA does.
-
-
-
-      // FIXME:
-      if (can_one_pass && (text.start_buffer == text.end_buffer) &&
-          (ncap > 1 || text.start_buffer->current_size <= 8)) {
+      if (can_one_pass && (subtext.start_buffer == subtext.end_buffer) &&
+          (ncap > 1 || subtext.start_buffer->current_size <= 8)) {
         skipped_test = true;
         break;
       }
-      if (can_bit_state && (text.start_buffer == text.end_buffer) && 
-        text.start_buffer->current_size <= bit_state_text_max && ncap > 1) {
+      if (can_bit_state && (subtext.start_buffer == subtext.end_buffer) && 
+        subtext.start_buffer->current_size <= bit_state_text_max && ncap > 1) {
         skipped_test = true;
         break;
       }
-      if (!prog_->SearchDFA(subtext, text, anchor, kind,
+      if (!prog_->SearchDFA(subtext, context, anchor, kind,
                             &match, &dfa_failed, NULL)) {
         if (dfa_failed) {
           if (options_.log_errors())
@@ -816,20 +783,21 @@ bool RE2::Match(const PGRegexContext& text,
     }
 
     if (can_one_pass && anchor != Prog::kUnanchored) {
-      if (!prog_->SearchOnePass(subtext1, text, anchor, kind, submatch, ncap)) {
+      if (!prog_->SearchOnePass(subtext1, context, anchor, kind, submatch, ncap)) {
         if (!skipped_test && options_.log_errors())
           LOG(ERROR) << "SearchOnePass inconsistency";
         return false;
       }
     } else if (can_bit_state && (subtext1.start_buffer == subtext1.end_buffer) && subtext1.start_buffer->current_size <= bit_state_text_max) {
-      if (!prog_->SearchBitState(subtext1, text, anchor,
+      // bitstate only supports single buffer searches
+      if (!prog_->SearchBitState(subtext1, context, anchor,
                                  kind, submatch, ncap)) {
         if (!skipped_test && options_.log_errors())
           LOG(ERROR) << "SearchBitState inconsistency";
         return false;
       }
     } else {
-      if (!prog_->SearchNFA(subtext1, text, anchor, kind, submatch, ncap)) {
+      if (!prog_->SearchNFA(subtext1, context, anchor, kind, submatch, ncap)) {
         if (!skipped_test && options_.log_errors())
           LOG(ERROR) << "SearchNFA inconsistency";
         return false;
@@ -838,10 +806,12 @@ bool RE2::Match(const PGRegexContext& text,
   }
 
   // Adjust overall match for required prefix that we stripped off.
-  /*if (prefixlen > 0 && nsubmatch > 0)
-    submatch[0] = StringPiece(submatch[0].data() - prefixlen,
-                              submatch[0].size() + prefixlen);
-  */
+  if (prefixlen > 0 && nsubmatch > 0) {
+    PGTextPosition pos = submatch[0].startpos() - prefixlen;
+    submatch[0].start_buffer = pos.buffer;
+    submatch[0].start_position = pos.position;
+  }
+  
   // Zero submatches that don't exist in the regexp.
   for (int i = ncap; i < nsubmatch; i++)
     submatch[i] = PGRegexContext();
@@ -878,7 +848,7 @@ bool RE2::DoMatch(const PGRegexContext& text,
     heapvec = vec;
   }
 
-  if (!Match(text, anchor, vec, nvec)) {
+  if (!Match(text, text, anchor, vec, nvec)) {
     delete[] heapvec;
     return false;
   }

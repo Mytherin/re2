@@ -301,9 +301,12 @@ void TestInstance::RunSearch(Engine type,
   StringPiece str_text = orig_text;
   StringPiece str_context = orig_context;
 
-
-  PGRegexContext text = PGRegexContext(str_text);
   PGRegexContext context = PGRegexContext(str_context);
+  PGRegexContext text;
+  text.start_buffer = context.start_buffer;
+  text.end_buffer = context.start_buffer;
+  text.start_position = orig_text.data() - orig_context.data();
+  text.end_position = text.start_position + orig_text.size();
 
   PGRegexContext regex_context_matches[kMaxSubmatch];
 
@@ -411,7 +414,7 @@ void TestInstance::RunSearch(Engine type,
       if (kind_ == Prog::kFullMatch)
         re_anchor = RE2::ANCHOR_BOTH;
 
-      result->matched = re2_->Match(
+      result->matched = re2_->Match(context,
           text,
           re_anchor,
           regex_context_matches,
@@ -530,6 +533,7 @@ bool TestInstance::RunCase(const StringPiece& text, const StringPiece& context,
     return false;
   }
   LOG(INFO) << "Try: regexp \"" << CEscape(regexp_str_)
+          << "\" in context \"" << CEscape(context)
           << "\" on text \"" << CEscape(text)
           << "\" (" << FormatKind(kind_)
           << ", " << FormatAnchor(anchor)
@@ -568,6 +572,7 @@ bool TestInstance::RunCase(const StringPiece& text, const StringPiece& context,
         LOG(INFO) << "   Should not match (but does).";
       } else {
         LOG(INFO) << "   Should match (but does not).";
+        exit(1);
         continue;
       }
     }
@@ -585,6 +590,7 @@ bool TestInstance::RunCase(const StringPiece& text, const StringPiece& context,
                        FormatCapture(text, r.submatch[i]).c_str());
       }
     }
+    exit(1);
   }
 
   if (!all_okay) {

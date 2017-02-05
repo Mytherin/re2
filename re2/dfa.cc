@@ -1643,43 +1643,48 @@ bool DFA::AnalyzeSearch(SearchParams* params) {
   const PGRegexContext& context = params->context;
 
   // Sanity check: make sure that text lies within context.
-  /*
-  if (text.begin() < context.begin() || text.end() > context.end()) {
+  if (text.startpos() < context.startpos() || text.endpos() > context.endpos()) {
     LOG(DFATAL) << "context does not contain text";
     params->start = DeadState;
     return true;
-  }*/
+  }
 
   // Determine correct search type.
   int start;
   uint32_t flags;
   if (params->run_forward) {
-    if (text.begin() == context.begin()) {
+    if (text.startpos() == context.startpos()) {
       start = kStartBeginText;
       flags = kEmptyBeginText|kEmptyBeginLine;
-    } else if (text.begin()[-1] == '\n') {
-      start = kStartBeginLine;
-      flags = kEmptyBeginLine;
-    } else if (Prog::IsWordChar(text.begin()[-1] & 0xFF)) {
-      start = kStartAfterWordChar;
-      flags = kFlagLastWord;
     } else {
-      start = kStartAfterNonWordChar;
-      flags = 0;
+      char prevchar = *(text.startpos() - 1);
+      if (prevchar == '\n') {
+        start = kStartBeginLine;
+        flags = kEmptyBeginLine;
+      } else if (Prog::IsWordChar(prevchar & 0xFF)) {
+        start = kStartAfterWordChar;
+        flags = kFlagLastWord;
+      } else {
+        start = kStartAfterNonWordChar;
+        flags = 0;
+      }
     }
   } else {
-    if (text.end() == context.end()) {
+    if (text.endpos() == context.endpos()) {
       start = kStartBeginText;
       flags = kEmptyBeginText|kEmptyBeginLine;
-    } else if (text.end()[0] == '\n') {
-      start = kStartBeginLine;
-      flags = kEmptyBeginLine;
-    } else if (Prog::IsWordChar(text.end()[0] & 0xFF)) {
-      start = kStartAfterWordChar;
-      flags = kFlagLastWord;
     } else {
-      start = kStartAfterNonWordChar;
-      flags = 0;
+        char nextchar = *text.endpos();
+        if (nextchar == '\n') {
+          start = kStartBeginLine;
+          flags = kEmptyBeginLine;
+        } else if (Prog::IsWordChar(nextchar & 0xFF)) {
+          start = kStartAfterWordChar;
+          flags = kFlagLastWord;
+        } else {
+          start = kStartAfterNonWordChar;
+          flags = 0;
+        }
     }
   }
   if (params->anchored || prog_->anchor_start())

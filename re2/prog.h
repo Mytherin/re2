@@ -211,7 +211,8 @@ class Prog {
 
   // Returns the set of kEmpty flags that are in effect at
   // position p within context.
-  static uint32_t EmptyFlags(const PGRegexContext& context, const char* p);
+  static uint32_t EmptyFlags(const PGRegexContext& context, PGTextPosition p);
+  static uint32_t EmptyFlagsCharacter(const PGRegexContext& context, const char* p);
 
   // Returns whether byte c is a word character: ASCII only.
   // Used by the implementation of \b and \B.

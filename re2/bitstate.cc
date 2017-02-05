@@ -253,7 +253,7 @@ bool BitState::TrySearch(int id0, const char* p0) {
         continue;
 
       case kInstEmptyWidth:
-        if (ip->empty() & ~Prog::EmptyFlags(context_, p))
+        if (ip->empty() & ~Prog::EmptyFlagsCharacter(context_, p))
           goto Next;
 
         if (!ip->last())

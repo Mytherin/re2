@@ -213,7 +213,7 @@ bool Backtracker::Try(int id, const char* p) {
       return Visit(ip->out(), p);
 
     case kInstEmptyWidth:
-      if (ip->empty() & ~Prog::EmptyFlags(context_, p))
+      if (ip->empty() & ~Prog::EmptyFlagsCharacter(context_, p))
         return false;
       return Visit(ip->out(), p);
 
