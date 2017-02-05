@@ -286,9 +286,15 @@ class Prog {
 
   // Bit-state backtracking.  Fast on small cases but uses memory
   // proportional to the product of the program size and the text size.
-  bool SearchBitState(const StringPiece& text, const StringPiece& context,
+  bool SearchBitState(const PGRegexContext& text, const PGRegexContext& context,
                       Anchor anchor, MatchKind kind,
-                      StringPiece* match, int nmatch);
+                      PGRegexContext* match, int nmatch);
+  bool SearchBitState(const StringPiece& text,
+                          const StringPiece& context,
+                          Anchor anchor,
+                          MatchKind kind,
+                          StringPiece* match,
+                          int nmatch);
 
   static const int kMaxOnePassCapture = 5;  // $0 through $4
 

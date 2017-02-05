@@ -40,9 +40,9 @@ class BitState {
 
   // The usual Search prototype.
   // Can only call Search once per BitState.
-  bool Search(const PGRegexContext& text, const PGRegexContext& context,
+  bool Search(const StringPiece& text, const StringPiece& context,
               bool anchored, bool longest,
-              PGRegexContext* submatch, int nsubmatch);
+              StringPiece* submatch, int nsubmatch);
 
  private:
   inline bool ShouldVisit(int id, const char* p);
@@ -52,12 +52,12 @@ class BitState {
 
   // Search parameters
   Prog* prog_;              // program being run
-  PGRegexContext text_;        // text being searched
-  PGRegexContext context_;     // greater context of text being searched
+  StringPiece text_;        // text being searched
+  StringPiece context_;     // greater context of text being searched
   bool anchored_;           // whether search is anchored at text.begin()
   bool longest_;            // whether search wants leftmost-longest match
   bool endmatch_;           // whether match must end at text.end()
-  PGRegexContext *submatch_;   // submatches to fill in
+  StringPiece *submatch_;   // submatches to fill in
   int nsubmatch_;           //   # of submatches to fill in
 
   // Search state
@@ -369,6 +369,50 @@ bool BitState::Search(const StringPiece& text, const StringPiece& context,
 }
 
 // Bit-state search.
+
+bool Prog::SearchBitState(const PGRegexContext& text, const PGRegexContext& context,
+                      Anchor anchor, MatchKind kind,
+                      PGRegexContext* match, int nmatch) {
+  // bit states only work on single buffers
+  if (text.start_buffer != text.end_buffer) {
+    return false;
+  }
+  StringPiece sp_text = StringPiece(text.start_buffer->buffer + text.start_position, text.end_position - text.start_position);
+  char* context_start;
+  size_t context_length;
+  if (context.start_buffer == text.start_buffer) {
+    context_start = context.start_buffer->buffer + context.start_position;
+  } else {
+    context_start = text.start_buffer->buffer + text.start_position - 1;
+  }
+  if (context.end_buffer == text.end_buffer) {
+    context_length = context.end_position - context.start_position;
+  } else {
+    context_length = (text.start_buffer->buffer + text.start_buffer->current_size) - context_start;
+  }
+  StringPiece sp_context = StringPiece(context_start, context_length);
+
+  StringPiece* sp_match = new StringPiece[nmatch];
+  for(int i = 0; i < nmatch; i++) {
+    if (match[i].start_buffer == text.start_buffer) {
+      sp_match[i] = StringPiece(match[i].start_buffer->buffer + match[i].start_position, match[i].end_position - match[i].start_position);
+    }
+  }
+  bool retval = SearchBitState(sp_text, sp_context, anchor, kind, sp_match, nmatch);
+
+  for(int i = 0; i < nmatch; i++) {
+    if (sp_match[i].data()) {
+      match[i].start_buffer = match[i].end_buffer = text.start_buffer;
+      match[i].start_position = (sp_match[i].data() - match[i].start_buffer->buffer);
+      match[i].end_position = match[i].start_position + sp_match[i].size(); 
+    } else {
+      match[i].start_buffer = match[i].end_buffer = nullptr;
+    }
+  }
+  delete [] sp_match;
+  return retval;
+}
+
 bool Prog::SearchBitState(const StringPiece& text,
                           const StringPiece& context,
                           Anchor anchor,

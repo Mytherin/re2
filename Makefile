@@ -109,6 +109,7 @@ HFILES=\
 OFILES=\
 	obj/util/rune.o\
 	obj/util/strutil.o\
+	obj/re2/bitstate.o\
 	obj/re2/compile.o\
 	obj/re2/dfa.o\
 	obj/re2/filtered_re2.o\

@@ -43,14 +43,35 @@ public:
 };
 
 struct PGTextPosition {
-  PGTextBuffer* buffer;
-  lng position;
+  PGTextBuffer* buffer = nullptr;
+  lng position = 0;
 
   char* data() { return buffer->buffer + position; }
 
   PGTextPosition(PGTextBuffer* buffer, const char* ptr) : buffer(buffer), position(ptr - buffer->buffer) { }
   PGTextPosition() : buffer(nullptr), position(0) { }
   PGTextPosition(PGTextBuffer* buffer) : buffer(buffer), position(0) { }
+  PGTextPosition(PGTextBuffer* buffer, lng position) : buffer(buffer), position(position) { }
+
+  inline char operator* (){ return buffer ? buffer->buffer[position] : '\0'; }
+
+
+  void Offset(lng offset) {
+    if (buffer == nullptr) {
+      return;
+    }
+    position += offset;
+    while(position > (lng) buffer->current_size) {
+      position -= buffer->current_size;
+      buffer = buffer->next;
+      if (!buffer) return;
+    }
+    while(position < 0) {
+      buffer = buffer->prev;
+      if (!buffer) return;
+      position += buffer->current_size;
+    }
+  }
 };
 
 inline bool operator< (const PGTextPosition& lhs, const PGTextPosition& rhs) { 
@@ -63,6 +84,17 @@ inline bool operator>=(const PGTextPosition& lhs, const PGTextPosition& rhs){ re
 inline bool operator== (const PGTextPosition& lhs, const PGTextPosition& rhs){ 
   return (lhs.buffer == rhs.buffer && lhs.position == rhs.position);
 }
+inline bool operator!= (const PGTextPosition& lhs, const PGTextPosition& rhs){ return !(lhs == rhs); }
+
+
+inline PGTextPosition operator+ (PGTextPosition lhs, lng rhs) {
+  lhs.Offset(rhs);
+  return lhs;
+}
+inline PGTextPosition operator- (const PGTextPosition& lhs, lng rhs) {
+  return lhs + (-rhs);
+}
+
 
 namespace re2 {
 
@@ -85,13 +117,18 @@ class StringPiece {
   // in a "const char*" or a "string" wherever a "StringPiece" is
   // expected.
   StringPiece()
-      : data_(NULL), size_(0) {}
+      : data_(NULL), size_(0), own_data_(false) {}
   StringPiece(const std::string& str)
-      : data_(str.data()), size_(str.size()) {}
+      : data_(str.data()), size_(str.size()), own_data_(false) {}
   StringPiece(const char* str)
-      : data_(str), size_(str == NULL ? 0 : strlen(str)) {}
-  StringPiece(const char* str, size_type len)
-      : data_(str), size_(len) {}
+      : data_(str), size_(str == NULL ? 0 : strlen(str)), own_data_(false) {}
+  StringPiece(const char* str, size_type len, bool own_data = false)
+      : data_(str), size_(len), own_data_(own_data) {}
+  ~StringPiece() {
+    if (own_data_ && data_) {
+      free((void*)data_);
+    }
+  }
 
   const_iterator begin() const { return data_; }
   const_iterator end() const { return data_ + size_; }
@@ -189,6 +226,7 @@ class StringPiece {
  private:
   const_pointer data_;
   size_type size_;
+  bool own_data_ = false;
 };
 
 inline bool operator==(const StringPiece& x, const StringPiece& y) {
@@ -251,9 +289,12 @@ struct PGRegexContext {
 
   PGRegexContext() : start_buffer(nullptr), start_position(0), end_buffer(nullptr), end_position(0) { }
 
-  std::string GetString() const {
+  re2::StringPiece GetString() const {
     if (!start_buffer || !end_buffer) {
-      return std::string();
+      return re2::StringPiece();
+    }
+    if (start_buffer == end_buffer) {
+      return re2::StringPiece(start_buffer->buffer + start_position, end_position - start_position);
     }
     size_t size = 0;
     PGTextBuffer* buffer = start_buffer;
@@ -265,6 +306,9 @@ struct PGRegexContext {
     }
     size += end_position - position;
     char* data = (char*) malloc(size * sizeof(char) + 1);
+    if (!data) {
+      return re2::StringPiece();
+    }
     char* current_data = data;
     buffer = start_buffer;
     position = start_position;
@@ -276,10 +320,12 @@ struct PGRegexContext {
       buffer = buffer->next;
     }
     memcpy(current_data, buffer->buffer + position, end_position - position);
-    std::string result = std::string(data, size);
-    free(data);
+    re2::StringPiece result = re2::StringPiece(data, size, true);
     return result;
   }
+
+  PGTextPosition startpos() const { return PGTextPosition(start_buffer, start_position); }
+  PGTextPosition endpos() const { return PGTextPosition(end_buffer, end_position); }
 
   char* begin() const { return start_buffer->buffer + start_position; }
   char* end_start() const { return 

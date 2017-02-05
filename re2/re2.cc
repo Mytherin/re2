@@ -630,18 +630,7 @@ bool RE2::Match(const StringPiece& text,
   bool retval = Match(context, anchor, submatches, nmatch);
   if (retval) {
     for(int i = 0; i < nmatch; i++) {
-      if (submatches[i].start_buffer == nullptr) break;
-      char* data;
-      size_t length;
-      if (submatches[i].start_buffer != submatches[i].end_buffer) {
-        std::string text = submatches[i].GetString();
-        data = strdup(text.c_str());
-        length = text.size();
-      } else {
-        data = submatches[i].start_buffer->buffer + submatches[i].start_position;
-        length = submatches[i].end_position - submatches[i].start_position;
-      }
-      match[i] = StringPiece(data, length);
+      match[i] = submatches[i].GetString();
     }
   }
   return retval;
@@ -781,15 +770,16 @@ bool RE2::Match(const PGRegexContext& text,
 
 
       // FIXME:
-      /*if (can_one_pass && text.size() <= 4096 &&
-          (ncap > 1 || text.size() <= 8)) {
+      if (can_one_pass && (text.start_buffer == text.end_buffer) &&
+          (ncap > 1 || text.start_buffer->current_size <= 8)) {
         skipped_test = true;
         break;
       }
-      if (can_bit_state && text.size() <= bit_state_text_max && ncap > 1) {
+      if (can_bit_state && (text.start_buffer == text.end_buffer) && 
+        text.start_buffer->current_size <= bit_state_text_max && ncap > 1) {
         skipped_test = true;
         break;
-      }*/
+      }
       if (!prog_->SearchDFA(subtext, text, anchor, kind,
                             &match, &dfa_failed, NULL)) {
         if (dfa_failed) {
@@ -829,6 +819,13 @@ bool RE2::Match(const PGRegexContext& text,
       if (!prog_->SearchOnePass(subtext1, text, anchor, kind, submatch, ncap)) {
         if (!skipped_test && options_.log_errors())
           LOG(ERROR) << "SearchOnePass inconsistency";
+        return false;
+      }
+    } else if (can_bit_state && (subtext1.start_buffer == subtext1.end_buffer) && subtext1.start_buffer->current_size <= bit_state_text_max) {
+      if (!prog_->SearchBitState(subtext1, text, anchor,
+                                 kind, submatch, ncap)) {
+        if (!skipped_test && options_.log_errors())
+          LOG(ERROR) << "SearchBitState inconsistency";
         return false;
       }
     } else {
@@ -905,8 +902,8 @@ bool RE2::DoMatch(const PGRegexContext& text,
   // If we got here, we must have matched the whole pattern.
   for (int i = 0; i < n; i++) {
     const PGRegexContext& s = vec[i+1];
-    std::string match = s.GetString();
-    if (!args[i]->Parse(match.c_str(), match.size())) {
+    auto match = s.GetString();
+    if (!args[i]->Parse(match.data(), match.size())) {
       // TODO: Should we indicate what the error was?
       delete[] heapvec;
       return false;

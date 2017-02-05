@@ -302,25 +302,8 @@ void TestInstance::RunSearch(Engine type,
   StringPiece str_context = orig_context;
 
 
-  PGTextBuffer buffer;
-  buffer.buffer = (char*) str_text.data();
-  buffer.current_size = str_text.size();
-
-  PGRegexContext text;
-  text.start_buffer = &buffer;
-  text.start_position = 0;
-  text.end_buffer = &buffer;
-  text.end_position = buffer.current_size;
-
-  PGTextBuffer buffer2;
-  buffer2.buffer = (char*) orig_context.data();
-  buffer2.current_size = orig_context.size();
-
-  PGRegexContext context;
-  context.start_buffer = &buffer2;
-  context.start_position = 0;
-  context.end_buffer = &buffer2;
-  context.end_position = buffer2.current_size;
+  PGRegexContext text = PGRegexContext(str_text);
+  PGRegexContext context = PGRegexContext(str_context);
 
   PGRegexContext regex_context_matches[kMaxSubmatch];
 
@@ -338,7 +321,6 @@ void TestInstance::RunSearch(Engine type,
                                      result->submatch, nsubmatch);
       result->have_submatch = true;
       break;
-    case kEngineBitState:
     case kEngineNFA:
       if (prog_ == NULL) {
         result->skipped = true;
@@ -348,7 +330,7 @@ void TestInstance::RunSearch(Engine type,
         prog_->SearchNFA(text, context, anchor, kind_,
                         regex_context_matches, nsubmatch);
       for(int i = 0; i < kMaxSubmatch; i++) {
-        result->submatch[i] = StringPiece(regex_context_matches[i].GetString());
+        result->submatch[i] = regex_context_matches[i].GetString();
       }
       result->have_submatch = true;
       break;
@@ -382,7 +364,7 @@ void TestInstance::RunSearch(Engine type,
           result->matched = false;
         }
         for(int i = 0; i < kMaxSubmatch; i++) {
-          result->submatch[i] = StringPiece(regex_context_matches[i].GetString());
+        result->submatch[i] = regex_context_matches[i].GetString();
         }
       }
       result->have_submatch0 = true;
@@ -399,11 +381,10 @@ void TestInstance::RunSearch(Engine type,
       result->matched = prog_->SearchOnePass(text, context, anchor, kind_,
                                       regex_context_matches, nsubmatch);
       for(int i = 0; i < kMaxSubmatch; i++) {
-        result->submatch[i] = StringPiece(regex_context_matches[i].GetString());
+        result->submatch[i] = regex_context_matches[i].GetString();
       }
       result->have_submatch = true;
       break;
-/*
     case kEngineBitState:
       if (prog_ == NULL) {
         result->skipped = true;
@@ -413,7 +394,7 @@ void TestInstance::RunSearch(Engine type,
                                               result->submatch, nsubmatch);
       result->have_submatch = true;
       break;
-*/
+
     case kEngineRE2:
     case kEngineRE2a:
     case kEngineRE2b: {
@@ -431,12 +412,12 @@ void TestInstance::RunSearch(Engine type,
         re_anchor = RE2::ANCHOR_BOTH;
 
       result->matched = re2_->Match(
-          context,
+          text,
           re_anchor,
           regex_context_matches,
           nsubmatch);
       for(int i = 0; i < kMaxSubmatch; i++) {
-        result->submatch[i] = StringPiece(regex_context_matches[i].GetString());
+        result->submatch[i] = regex_context_matches[i].GetString();
       }
       result->have_submatch = nsubmatch > 0;
       break;
@@ -548,9 +529,9 @@ bool TestInstance::RunCase(const StringPiece& text, const StringPiece& context,
                << " " << FormatMode(flags_);
     return false;
   }
-  VLOG(1) << "Try: regexp " << CEscape(regexp_str_)
-          << " text " << CEscape(text)
-          << " (" << FormatKind(kind_)
+  LOG(INFO) << "Try: regexp \"" << CEscape(regexp_str_)
+          << "\" on text \"" << CEscape(text)
+          << "\" (" << FormatKind(kind_)
           << ", " << FormatAnchor(anchor)
           << ", " << FormatMode(flags_)
           << ")";
