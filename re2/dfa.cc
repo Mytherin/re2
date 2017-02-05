@@ -50,17 +50,6 @@
 
 namespace re2 {
 
-#if !defined(__linux__)  /* only Linux seems to have memrchr */
-static void* memrchr(const void* s, int c, size_t n) {
-  const unsigned char* p = (const unsigned char*)s;
-  for (p += n; n > 0; n--)
-    if (*--p == c)
-      return (void*)p;
-
-  return NULL;
-}
-#endif
-
 // Controls whether the DFA should bail out early if the NFA would be faster.
 static bool dfa_should_bail_when_slow = true;
 
@@ -1352,17 +1341,23 @@ inline bool DFA::InlinedSearchLoop(SearchParams* params,
         // so use optimized assembly in memchr to skip ahead.
         // If firstbyte isn't found, we can skip to the end
         // of the string.
+
+        // FIXME: use memchr on buffers
         if (run_forward) {
-          if ((p = BytePtr(memchr(p, params->firstbyte, ep - p))) == NULL) {
-            p = ep;
-            break;
-          }
+          PGRegexContext remaining_text(PGTextPosition(current_buffer, (char*)p), piece->endpos());
+          PGTextPosition position = remaining_text._memchr(params->firstbyte);
+          current_buffer = position.buffer == nullptr ? piece->end_buffer : position.buffer;
+          ep = (const uint8_t*) current_buffer->buffer +  (piece->start_buffer == piece->end_buffer ? piece->end_position : current_buffer->current_size);
+          p = position.buffer == nullptr ? ep : (const uint8_t*) current_buffer->buffer + position.position;
+          if (position.buffer == nullptr) break;
         } else {
-          if ((p = BytePtr(memrchr(ep, params->firstbyte, p - ep))) == NULL) {
-            p = ep;
-            break;
-          }
-          p++;
+          PGRegexContext remaining_text(piece->startpos(), PGTextPosition(current_buffer, (char*)p));
+          PGTextPosition position = remaining_text._memrchr(params->firstbyte);
+          if (position.buffer != nullptr) position = position + 1;
+          current_buffer = position.buffer == nullptr ? piece->end_buffer : position.buffer;
+          ep = (const uint8_t*) current_buffer->buffer +  (piece->start_buffer == piece->end_buffer ? piece->end_position : current_buffer->current_size);
+          p = position.buffer == nullptr ? ep : (const uint8_t*) current_buffer->buffer + position.position;
+          if (position.buffer == nullptr) break;
         }
       }
 
@@ -1437,8 +1432,7 @@ inline bool DFA::InlinedSearchLoop(SearchParams* params,
           return matched;
         }
         // FullMatchState
-        params->ep.buffer = current_buffer;
-        params->ep.position = (char*) ep - current_buffer->buffer;
+        params->ep = run_forward ? piece->endpos() : piece->startpos();
         return true;
       }
       s = ns;
@@ -1449,13 +1443,16 @@ inline bool DFA::InlinedSearchLoop(SearchParams* params,
         // so adjust p before using it in the match.
         if (run_forward) {
           lastmatch.buffer = current_buffer;
-          lastmatch.position = (char*) p - current_buffer->buffer - 1;
+          lastmatch.position = (char*) p - current_buffer->buffer;
+          lastmatch = lastmatch - 1;
         }
         else {
           lastmatch.buffer = current_buffer;
-          lastmatch.position = (char*) p - current_buffer->buffer + 1;
+          lastmatch.position = (char*) p - current_buffer->buffer;
+          lastmatch = lastmatch + 1;
         }
-        assert(lastmatch.position >= 0);
+        assert(lastmatch.position >= 0 && ((lastmatch.position < (lng) lastmatch.buffer->current_size && lastmatch.buffer->next) || 
+                                         (lastmatch.position <= (lng) lastmatch.buffer->current_size && !lastmatch.buffer->next)));
 
         if (want_earliest_match) {
           params->ep = lastmatch;
@@ -1466,8 +1463,10 @@ inline bool DFA::InlinedSearchLoop(SearchParams* params,
     if (p != ep) break;
     PGTextBuffer* next_buffer;
     if (run_forward) {
+      if (current_buffer == piece->end_buffer) break;
       next_buffer = current_buffer->next;
     } else {
+      if (current_buffer == piece->start_buffer) break;
       next_buffer = current_buffer->prev;
     }
     if (!next_buffer) break;
@@ -1501,7 +1500,7 @@ inline bool DFA::InlinedSearchLoop(SearchParams* params,
       if (piece->begin() == params->context.begin())
         lastbyte = kByteEndText;
       else
-        lastbyte = params->text.begin()[-1] & 0xFF;
+        lastbyte = *(params->text.startpos() - 1) & 0xFF;
     }
   }
 

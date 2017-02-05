@@ -298,10 +298,84 @@ void TestInstance::RunSearch(Engine type,
   if (nsubmatch > kMaxSubmatch)
     nsubmatch = kMaxSubmatch;
 
+  lng startpos = orig_text.data() - orig_context.data();
+  lng endpos = startpos + orig_text.size();
+
   StringPiece str_text = orig_text;
   StringPiece str_context = orig_context;
+/*
+
+  // This code is for testing purposes:
+  // it converts a stringpiece into a set of chained buffers, where each buffer holds 1 character
+
+  PGRegexContext text;
+  PGRegexContext context;
+
+  size_t size = 2 * str_context.size();
+  char* massive_buffer = (char*) malloc(size);
+  char* current_ptr = massive_buffer + size - 2;
+
+  PGTextBuffer* first = nullptr;
+  if (str_context.size() == 0) {
+    PGTextBuffer* buffer = new PGTextBuffer();
+    first = buffer;
+    buffer->prev = nullptr;
+    buffer->next = nullptr;
+    buffer->current_size = 0;
+    buffer->buffer = (char*) malloc(1);
+    buffer->buffer[0] = '\0';
+
+    text.start_buffer = buffer;
+    text.start_position = 0;
+    text.end_buffer = buffer;
+    text.end_position = 0;
+    context.start_buffer = buffer;
+    context.start_position = 0;
+    context.end_buffer = buffer;
+    context.end_position = 0;
+  } else {
+    PGTextBuffer* prev = nullptr;
+    for(int i = 0; i < str_context.size(); i++) {
+      PGTextBuffer* buffer = new PGTextBuffer();
+      buffer->buffer = current_ptr;
+      current_ptr -= 2;
+      buffer->buffer[0] = str_context[i];
+      buffer->buffer[1] = '\0';
+      buffer->current_size = 1;
+      buffer->start_line = i;
+      buffer->prev = prev;
+      if (prev) {
+        prev->next = buffer;
+      } else {
+        first = buffer;
+        context.start_buffer = first;
+        context.start_position = 0;
+      }
+      if (i == startpos) {
+        text.start_buffer = buffer;
+        text.start_position = 0;
+      }
+      if (i == endpos) {
+        text.end_buffer = buffer;
+        text.end_position = 0;
+      }
+      prev = buffer;
+    }
+    if (startpos == str_context.size()) {
+      text.start_buffer = prev;
+      text.start_position = 1;
+    }
+    if (endpos == str_context.size()) {
+      text.end_buffer = prev;
+      text.end_position = 1;
+    }
+    context.end_buffer = prev;
+    context.end_position = 1;
+  }*/
+
 
   PGRegexContext context = PGRegexContext(str_context);
+  PGTextBuffer* first = context.start_buffer;
   PGRegexContext text;
   text.start_buffer = context.start_buffer;
   text.end_buffer = context.start_buffer;
@@ -309,6 +383,16 @@ void TestInstance::RunSearch(Engine type,
   text.end_position = text.start_position + orig_text.size();
 
   PGRegexContext regex_context_matches[kMaxSubmatch];
+
+#define CONVERT_MATCHES_TO_SUBMATCHES() \
+ for(int i = 0; i < kMaxSubmatch; i++) { \
+  if (regex_context_matches[i].start_buffer) {  \
+    lng startpos = regex_context_matches[i].startpos().GetPosition(first); \
+    lng endpos = regex_context_matches[i].endpos().GetPosition(first); \
+    result->submatch[i] = StringPiece(orig_context.data() + startpos, endpos - startpos); \
+  } else { \
+    result->submatch[i] = StringPiece(); \
+  } }
 
   switch (type) {
     default:
@@ -332,9 +416,7 @@ void TestInstance::RunSearch(Engine type,
       result->matched =
         prog_->SearchNFA(text, context, anchor, kind_,
                         regex_context_matches, nsubmatch);
-      for(int i = 0; i < kMaxSubmatch; i++) {
-        result->submatch[i] = regex_context_matches[i].GetString();
-      }
+      CONVERT_MATCHES_TO_SUBMATCHES();
       result->have_submatch = true;
       break;
 
@@ -366,9 +448,7 @@ void TestInstance::RunSearch(Engine type,
                      << CEscape(regexp_str_);
           result->matched = false;
         }
-        for(int i = 0; i < kMaxSubmatch; i++) {
-        result->submatch[i] = regex_context_matches[i].GetString();
-        }
+        CONVERT_MATCHES_TO_SUBMATCHES();
       }
       result->have_submatch0 = true;
       break;
@@ -383,9 +463,7 @@ void TestInstance::RunSearch(Engine type,
       }
       result->matched = prog_->SearchOnePass(text, context, anchor, kind_,
                                       regex_context_matches, nsubmatch);
-      for(int i = 0; i < kMaxSubmatch; i++) {
-        result->submatch[i] = regex_context_matches[i].GetString();
-      }
+      CONVERT_MATCHES_TO_SUBMATCHES();
       result->have_submatch = true;
       break;
     case kEngineBitState:
@@ -419,9 +497,7 @@ void TestInstance::RunSearch(Engine type,
           re_anchor,
           regex_context_matches,
           nsubmatch);
-      for(int i = 0; i < kMaxSubmatch; i++) {
-        result->submatch[i] = regex_context_matches[i].GetString();
-      }
+      CONVERT_MATCHES_TO_SUBMATCHES();
       result->have_submatch = nsubmatch > 0;
       break;
     }
@@ -545,6 +621,13 @@ bool TestInstance::RunCase(const StringPiece& text, const StringPiece& context,
   for (Engine i = kEngineBacktrack+1; i < kEngineMax; i++) {
     if (!(Engines() & (1<<i)))
       continue;
+/*
+    if (i == kEngineDFA1 && CEscape(regexp_str_) == "\\\\P{Greek}+" && 
+      CEscape(context) == "a\\316\\261\\316\\262b" && 
+      CEscape(text) == "a\\316\\261\\316\\262b" && 
+      flags_ == single_line|Regexp::Latin1 && anchor == Prog::kAnchored && kind_ == Prog::kFirstMatch) {
+      int x = 5;
+    }*/
 
     Result r;
     RunSearch(i, text, context, anchor, &r);
@@ -590,6 +673,7 @@ bool TestInstance::RunCase(const StringPiece& text, const StringPiece& context,
                        FormatCapture(text, r.submatch[i]).c_str());
       }
     }
+    //int x = 5;
     exit(1);
   }
 

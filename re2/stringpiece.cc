@@ -55,6 +55,7 @@ static int _ascii_strcasecmp(const char* a, const char* b, size_t len) {
         /* early out if the comparison fails */ \
         return retval; \
       } \
+      data += buffer_left;  \
       length -= buffer_left; \
     } else { \
       /* length fits within the buffer, finish the comparison */ \
@@ -75,6 +76,54 @@ int PGRegexContext::ascii_strcasecmp(const char* data, size_t length) const {
 
 int PGRegexContext::_memcmp(const char* data, size_t length) const {
   BUFFER_COMPARISON(memcmp);
+}
+
+#if !defined(__linux__)  /* only Linux seems to have memrchr */
+static void* memrchr(const void* s, int c, size_t n) {
+  const unsigned char* p = (const unsigned char*)s;
+  for (p += n; n > 0; n--)
+    if (*--p == c)
+      return (void*)p;
+
+  return NULL;
+}
+#endif
+
+PGTextPosition PGRegexContext::_memrchr(int value) const {
+  PGTextBuffer* buffer = end_buffer;
+  lng end = end_position;
+  while(buffer) {
+    lng start = (buffer == start_buffer ?  start_position : 0);
+    void* ptr = memrchr(buffer->buffer + start, value, end - start);
+    if (ptr != nullptr) {
+      return PGTextPosition(buffer, (char*) ptr);
+    }
+    if (buffer == start_buffer) {
+      break;
+    }
+    buffer = buffer->next;
+    end = buffer->current_size;
+  }
+  return PGTextPosition(nullptr, (lng) 0);
+}
+
+
+PGTextPosition PGRegexContext::_memchr(int value) const {
+  PGTextBuffer* buffer = start_buffer;
+  lng start = start_position;
+  while(buffer) {
+    lng buffer_left = (buffer == end_buffer ?  end_position : buffer->current_size) - start;
+    void* ptr = memchr(buffer->buffer + start, value, buffer_left);
+    if (ptr != nullptr) {
+      return PGTextPosition(buffer, (char*) ptr);
+    }
+    if (buffer == end_buffer) {
+      break;
+    }
+    buffer = buffer->next;
+    start = 0;
+  }
+  return PGTextPosition(nullptr, (lng) 0);
 }
 
 namespace re2 {

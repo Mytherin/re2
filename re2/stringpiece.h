@@ -46,6 +46,17 @@ struct PGTextPosition {
   PGTextBuffer* buffer = nullptr;
   lng position = 0;
 
+  lng GetPosition(PGTextBuffer* start_buffer) {
+    lng current_position = 0;
+    PGTextBuffer* current_buffer = start_buffer;
+    while(current_buffer != buffer) {
+      current_position += current_buffer->current_size;
+      current_buffer = current_buffer->next;
+    }
+    current_position += position;
+    return current_position;
+  }
+
   char* data() { return buffer->buffer + position; }
 
   PGTextPosition(PGTextBuffer* buffer, const char* ptr) : buffer(buffer), position(ptr - buffer->buffer) { }
@@ -61,10 +72,10 @@ struct PGTextPosition {
       return;
     }
     position += offset;
-    while(position > (lng) buffer->current_size) {
+    while(position >= (lng) buffer->current_size) {
+      if (!buffer->next) return;
       position -= buffer->current_size;
       buffer = buffer->next;
-      if (!buffer) return;
     }
     while(position < 0) {
       buffer = buffer->prev;
@@ -95,6 +106,7 @@ inline PGTextPosition operator- (const PGTextPosition& lhs, lng rhs) {
   return lhs + (-rhs);
 }
 
+#include <memory>
 
 namespace re2 {
 
@@ -117,18 +129,14 @@ class StringPiece {
   // in a "const char*" or a "string" wherever a "StringPiece" is
   // expected.
   StringPiece()
-      : data_(NULL), size_(0), own_data_(false) {}
+      : data_(NULL), size_(0), owned_data_(nullptr) {}
   StringPiece(const std::string& str)
-      : data_(str.data()), size_(str.size()), own_data_(false) {}
+      : data_(str.data()), size_(str.size()), owned_data_(nullptr) {}
   StringPiece(const char* str)
-      : data_(str), size_(str == NULL ? 0 : strlen(str)), own_data_(false) {}
+      : data_(str), size_(str == NULL ? 0 : strlen(str)), owned_data_(nullptr) {}
   StringPiece(const char* str, size_type len, bool own_data = false)
-      : data_(str), size_(len), own_data_(own_data) {}
-  ~StringPiece() {
-    if (own_data_ && data_) {
-      free((void*)data_);
-    }
-  }
+      : data_(str), size_(len), owned_data_(own_data ? (char*) str : nullptr) {}
+
 
   const_iterator begin() const { return data_; }
   const_iterator end() const { return data_ + size_; }
@@ -226,7 +234,7 @@ class StringPiece {
  private:
   const_pointer data_;
   size_type size_;
-  bool own_data_ = false;
+  std::shared_ptr<char> owned_data_;
 };
 
 inline bool operator==(const StringPiece& x, const StringPiece& y) {
@@ -327,6 +335,9 @@ struct PGRegexContext {
   // "data" has to be lowercase
   int ascii_strcasecmp(const char* data, size_t length) const;
   int _memcmp(const char* data, size_t length) const;
+  PGTextPosition _memchr(int value) const;
+  PGTextPosition _memrchr(int value) const;
+
 
   PGTextPosition startpos() const { return PGTextPosition(start_buffer, start_position); }
   PGTextPosition endpos() const { return PGTextPosition(end_buffer, end_position); }

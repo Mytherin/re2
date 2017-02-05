@@ -580,10 +580,7 @@ bool RE2::Match(const StringPiece& str_context,
         Anchor anchor,
         StringPiece *match,
         int nmatch) const {
-  // FIXME: randomly split stringpiece into separate buffers
-  // and check if results are still correct
   PGRegexContext context = PGRegexContext(str_context);
-
 
   PGRegexContext text;
   text.start_buffer = context.start_buffer;
@@ -591,10 +588,10 @@ bool RE2::Match(const StringPiece& str_context,
   text.start_position = startpos;
   text.end_position = endpos;
 
-
   PGRegexContext* submatches = (PGRegexContext*) malloc(sizeof(PGRegexContext) * nmatch);
   for(int i = 0; i < nmatch; i++) {
     submatches[i].start_buffer = nullptr;
+    match[i] = StringPiece();
   }
 
 

@@ -471,7 +471,6 @@ bool NFA::Search(const PGRegexContext& text, const PGRegexContext& const_context
   PGTextBuffer* current_buffer = text.start_buffer;
   const char* p = text.begin();
   const char* ep = text.end_start();
-  const char* endptr = text.end_buffer->buffer + text.end_position;
 
 
   PGTextPosition prev = text.startpos() - 1;
@@ -480,14 +479,21 @@ bool NFA::Search(const PGRegexContext& text, const PGRegexContext& const_context
   for (;; prev = PGTextPosition(current_buffer, p), p++) {
     if (p >= ep) {
       // attempt to move to next buffer
-      if (!(current_buffer->next == nullptr || current_buffer->next == text.end_buffer)) {
-        current_buffer = current_buffer->next;
-        p = current_buffer->buffer;
-        ep = (current_buffer == text.start_buffer ? 
-          current_buffer->buffer + text.start_position : 
-          current_buffer->buffer);
+      if (!(current_buffer->next == nullptr)) {
+        if (current_buffer == text.end_buffer) {
+          current_buffer = current_buffer->next;
+          p = current_buffer->buffer;
+          ep = p - 1;
+        } else {
+          current_buffer = current_buffer->next;
+          p = current_buffer->buffer;
+          ep = current_buffer->buffer + (current_buffer == text.end_buffer ? 
+            text.end_position : 
+            current_buffer->current_size);
+        }
       }
     }
+    PGTextPosition current_position = PGTextPosition(current_buffer, p);
 
     // Check for empty-width specials.
     int flag = 0;
@@ -495,18 +501,18 @@ bool NFA::Search(const PGRegexContext& text, const PGRegexContext& const_context
     // ^ and \A
     if (p == context.begin())
       flag |= kEmptyBeginText | kEmptyBeginLine;
-    else if (p <= context.end() && *prev == '\n')
+    else if (current_position <= context.endpos() && *prev == '\n')
       flag |= kEmptyBeginLine;
 
     // $ and \z
     if (p == context.end())
       flag |= kEmptyEndText | kEmptyEndLine;
-    else if (p < context.end() && p[0] == '\n')
+    else if (current_position < context.endpos() && p[0] == '\n')
       flag |= kEmptyEndLine;
 
     // \b and \B
     int isword = 0;
-    if (p < context.end())
+    if (current_position < context.endpos())
       isword = Prog::IsWordChar(p[0] & 0xFF);
 
     if (isword != wasword)
@@ -519,7 +525,7 @@ bool NFA::Search(const PGRegexContext& text, const PGRegexContext& const_context
     // c and flag through to AddToThreadq() along with p-1+1, which is p.
     //
     // This is a no-op the first time around the loop because runq is empty.
-    int id = Step(runq, nextq, p < endptr ? p[0] & 0xFF : -1, flag, prev);
+    int id = Step(runq, nextq, current_position < text.endpos() ? p[0] & 0xFF : -1, flag, prev);
     DCHECK_EQ(runq->size(), 0);
     using std::swap;
     swap(nextq, runq);
@@ -566,13 +572,21 @@ bool NFA::Search(const PGRegexContext& text, const PGRegexContext& const_context
       // and we're not in the middle of any possible matches,
       // use memchr to search for the byte quickly.
       int fb = prog_->first_byte();
-      if (!anchored && runq->size() == 0 &&
-          fb >= 0 && p < text.end() && (p[0] & 0xFF) != fb) {
-        p = reinterpret_cast<const char*>(memchr(p, fb, text.end() - p));
-        if (p == NULL) {
+      if (!anchored && runq->size() == 0 && fb >= 0 && current_position < text.endpos() && (p[0] & 0xFF) != fb) {
+        PGRegexContext remaining_text(current_position, text.endpos());
+        PGTextPosition position = remaining_text._memchr(fb);
+
+        if (position.buffer == NULL) {
           p = text.end();
+          ep = p;
+          current_buffer = text.end_buffer;
           isword = 0;
         } else {
+          current_buffer = position.buffer;
+          p = position.buffer->buffer + position.position;
+          ep = current_buffer->buffer + (current_buffer == text.end_buffer ? 
+            text.end_position : 
+            current_buffer->current_size);
           isword = Prog::IsWordChar(p[0] & 0xFF);
         }
         flag = Prog::EmptyFlags(context, PGTextPosition(current_buffer, p));
@@ -580,9 +594,9 @@ bool NFA::Search(const PGRegexContext& text, const PGRegexContext& const_context
 
       Thread* t = AllocThread();
       CopyCapture(t->capture, match_);
-      auto current_position = PGTextPosition(current_buffer, p);
+      current_position = PGTextPosition(current_buffer, p);
       t->capture[0] = current_position;
-      AddToThreadq(runq, start_, p < endptr ? p[0] & 0xFF : -1, flag, current_position, t);
+      AddToThreadq(runq, start_, current_position < text.endpos() ? p[0] & 0xFF : -1, flag, current_position, t);
       Decref(t);
     }
 
